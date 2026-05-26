@@ -1,0 +1,37 @@
+# API keys y configuración local
+.env
+
+# Índices FAISS generados (se regeneran automáticamente)
+data/company_indexes/
+data/style_index.faiss
+data/style_index.meta.json
+
+# Tus ejemplos de estilo (datos privados)
+data/style_examples/
+
+# Outputs generados
+output/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Windows
+Thumbs.db
+desktop.ini

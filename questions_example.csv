@@ -1,0 +1,8 @@
+question,description
+Founded year,Year the company was founded. Single year only (e.g. 2017).
+Headquarters location,City and country where the company is headquartered.
+Core technology,Main technology or process. 2-3 sentences max.
+Commercial stage,Current development stage: R&D / Pilot / Demo / Commercial scale.
+Revenue,Annual revenue in USD if publicly available.
+Key partnerships,Main commercial or strategic partners.
+Feedstock used,Raw materials or inputs used in the process.
