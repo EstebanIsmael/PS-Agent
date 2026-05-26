@@ -1,47 +1,31 @@
 """
-Entry point.
+Entry point del sistema completo.
 
 Uso:
   python main.py
 
-Pasos:
-  1. Configura requirements y questions aquí abajo.
-  2. Corre el script — el Agent 1 busca empresas.
-  3. Revisás la lista y elegís cuáles investigar.
-  4. El Agent 2 las investiga y el Agent 3 escribe los perfiles.
-  5. Los JSONs quedan en /output.
+Flujo:
+  1. Agent 1 busca empresas segun REQUIREMENTS y muestra las top-20.
+  2. Vos elegis cuales investigar (ej: 1,3,5).
+  3. Agent 2 investiga cada empresa.
+  4. Agent 3 escribe el perfil usando tu QUESTIONS_FILE.
+  5. JSONs guardados en /output.
 """
 
 from pathlib import Path
 
-from graph import build_graph, save_profiles
-from models import Requirement
+from graph import run_discovery, run_research, run_writer, save_profiles
 from rag.style_rag import build_style_index
+from tools.questions_loader import load_questions
+from tools.requirements_loader import load_requirements
 
-# ── 1. Configura tu búsqueda ──────────────────────────────────────────────────
+# ── Configura tus archivos de input ──────────────────────────────────────────
 
-REQUIREMENTS = Requirement(
-    must_have=[
-        "chemical recycling",
-        "PET or polyester",
-    ],
-    desirable=[
-        "Europe",
-        "commercial stage",
-        "brand partnerships",
-    ],
-)
+# CSV/XLSX con columnas: type (must_have/desirable), requirement
+REQUIREMENTS_FILE = "requirements_example.csv"
 
-QUESTIONS = [
-    "Founded year",
-    "Headquarters location",
-    "Core recycling technology",
-    "Commercial stage",
-    "Revenue",
-    "Key partnerships",
-    "Feedstock used",
-    "Bio-based",
-]
+# CSV/XLSX con columnas: question, description (description es opcional)
+QUESTIONS_FILE = "questions_example.csv"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -51,16 +35,13 @@ def ensure_style_index() -> None:
     style_dir.mkdir(parents=True, exist_ok=True)
 
     if Path("data/style_index.faiss").exists():
-        print("[Style RAG] Index already exists, skipping rebuild.")
+        print("[Style RAG] Index already exists.")
         return
 
     csv_files = list(style_dir.glob("*.csv"))
     if not csv_files:
-        print(
-            "[Style RAG] WARNING: No CSV files in data/style_examples/. "
-            "Style RAG will not be used.\n"
-            "  -> Export your Google Sheet as CSV and place it there."
-        )
+        print("[Style RAG] WARNING: No CSV files in data/style_examples/.")
+        print("  -> Export your Google Sheet as CSV and place it there.")
         return
 
     print(f"[Style RAG] Building index from {len(csv_files)} CSV file(s)...")
@@ -70,45 +51,32 @@ def ensure_style_index() -> None:
 def run() -> None:
     ensure_style_index()
 
-    graph = build_graph()
-    config = {"configurable": {"thread_id": "run-1"}}
+    requirements = load_requirements(REQUIREMENTS_FILE)
+    questions = load_questions(QUESTIONS_FILE)
+    questions_dicts = [{"name": q.name, "description": q.description} for q in questions]
 
-    initial_state = {
-        "requirements": REQUIREMENTS.model_dump(),
-        "questions": QUESTIONS,
-        "candidate_companies": [],
-        "approved_companies": [],
-        "research_results": {},
-        "profiles": [],
-        "errors": [],
-    }
+    print(f"[Requirements] {len(requirements.must_have)} must-have, {len(requirements.desirable)} desirable — from '{REQUIREMENTS_FILE}'")
+    print(f"[Questions]    {len(questions)} questions — from '{QUESTIONS_FILE}'")
 
-    # ── Phase 1: Discovery (pauses before human_approval) ────────────────────
+    # ── Phase 1: Discovery ───────────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print("COMPANY PROFILER — Phase 1: Discovery")
+    print("PHASE 1 — Discovery Agent")
     print("=" * 60)
 
-    for _ in graph.stream(initial_state, config):
-        pass
-
-    # ── Human checkpoint ──────────────────────────────────────────────────────
-    current = graph.get_state(config)
-    candidates = current.values.get("candidate_companies", [])
+    candidates = run_discovery(requirements.model_dump())
 
     if not candidates:
         print("\nNo candidates found. Try adjusting your requirements.")
         return
 
-    print("\n" + "=" * 60)
-    print(f"HUMAN APPROVAL — {len(candidates)} candidates found")
-    print("=" * 60)
-
+    print(f"\n{len(candidates)} companies found:\n")
     for i, c in enumerate(candidates, 1):
-        print(f"\n  {i:2}. {c['name']}")
-        print(f"      Score : {c['score']:.2f}")
-        print(f"      URL   : {c['url']}")
-        print(f"      Note  : {c['summary']}")
+        print(f"  {i:2}. {c['name']}")
+        print(f"       Score : {c['score']:.2f}")
+        print(f"       URL   : {c['url']}")
+        print(f"       Note  : {c['summary']}")
 
+    # ── Human checkpoint ─────────────────────────────────────────────────────
     print("\nEnter the numbers to research (comma-separated, e.g. 1,3,5):")
     raw = input("> ").strip()
 
@@ -125,31 +93,31 @@ def run() -> None:
     ]
 
     if not approved:
-        print("No valid companies selected. Exiting.")
+        print("No valid selection. Exiting.")
         return
 
-    print(f"\nApproved: {[c['name'] for c in approved]}")
+    print(f"\nSelected: {[c['name'] for c in approved]}")
 
-    # Inject approved companies and resume
-    graph.update_state(config, {"approved_companies": approved})
-
-    # ── Phase 2: Research + Writer ────────────────────────────────────────────
+    # ── Phase 2: Research ────────────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print("Phase 2: Research & Writing")
+    print("PHASE 2 — Research Agent")
     print("=" * 60)
 
-    for _ in graph.stream(None, config):
-        pass
+    research_results = run_research(approved)
 
-    # ── Save output ───────────────────────────────────────────────────────────
-    final = graph.get_state(config)
-    profiles = final.values.get("profiles", [])
+    # ── Phase 3: Writer ──────────────────────────────────────────────────────
+    print("\n" + "=" * 60)
+    print("PHASE 3 — Writer Agent")
+    print("=" * 60)
 
+    profiles = run_writer(approved, research_results, questions_dicts)
+
+    # ── Save output ──────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     if profiles:
         print(f"Done — {len(profiles)} profile(s) generated")
         save_profiles(profiles)
-        print("\nFiles saved in /output")
+        print("Files saved in /output")
     else:
         print("No profiles generated. Check errors above.")
     print("=" * 60)

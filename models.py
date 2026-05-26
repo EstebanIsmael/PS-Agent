@@ -12,7 +12,7 @@ class CandidateCompany(BaseModel):
     name: str
     url: str
     score: float
-    score_breakdown: dict[str, bool] = Field(default_factory=dict)
+    score_breakdown: dict = Field(default_factory=dict)
     summary: str
 
 

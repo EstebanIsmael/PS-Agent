@@ -32,7 +32,6 @@ def _search_exa(company: str, num_results: int) -> list[Document]:
     result = exa.search_and_contents(
         f"{company} recycling technology news",
         num_results=num_results,
-        use_autoprompt=True,
         text=True,
     )
 
@@ -56,7 +55,7 @@ def _search_exa_raw(query: str, num_results: int) -> list[dict]:
         raise ValueError("EXA_API_KEY not set")
 
     exa = Exa(api_key=settings.exa_api_key)
-    result = exa.search(query, num_results=num_results, use_autoprompt=True)
+    result = exa.search(query, num_results=num_results)
 
     return [
         {
