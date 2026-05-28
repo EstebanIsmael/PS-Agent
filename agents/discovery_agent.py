@@ -11,7 +11,9 @@ Estrategia:
   4. Combina ambas listas y devuelve las top-50.
 """
 
+import hashlib
 import json
+from pathlib import Path
 from urllib.parse import urlparse
 
 from openai import OpenAI
@@ -19,6 +21,8 @@ from openai import OpenAI
 from config import settings
 from models import CandidateCompany, Requirement
 from tools.search import search_companies
+
+_CACHE_DIR = Path("cache/discovery")
 
 _client = OpenAI(api_key=settings.openai_api_key)
 
@@ -133,23 +137,39 @@ def _deep_search(requirements: Requirement) -> list[CandidateCompany]:
 
 # ── Regular search + GPT score ────────────────────────────────────────────────
 
+def _requirements_hash(requirements: Requirement) -> str:
+    key = json.dumps(requirements.model_dump(), sort_keys=True)
+    return hashlib.md5(key.encode()).hexdigest()[:10]
+
+
 def _regular_search_and_score(requirements: Requirement) -> list[CandidateCompany]:
-    queries = _generate_queries(requirements)
-    print(f"  Queries: {queries}")
+    cache_key = _requirements_hash(requirements)
+    cache_file = _CACHE_DIR / f"{cache_key}.json"
 
-    raw_results: list[dict] = []
-    for query in queries:
-        results = search_companies(query, num_results=15)
-        raw_results.extend(results)
+    if cache_file.exists():
+        print(f"  [cache] Loading search results from {cache_file}")
+        unique = json.loads(cache_file.read_text(encoding="utf-8"))
+    else:
+        queries = _generate_queries(requirements)
+        print(f"  Queries: {queries}")
 
-    # Deduplicar por dominio
-    seen: set[str] = set()
-    unique: list[dict] = []
-    for r in raw_results:
-        domain = urlparse(r.get("url", "")).netloc
-        if domain and domain not in seen:
-            seen.add(domain)
-            unique.append(r)
+        raw_results: list[dict] = []
+        for query in queries:
+            results = search_companies(query, num_results=15)
+            raw_results.extend(results)
+
+        # Deduplicar por dominio
+        seen: set[str] = set()
+        unique: list[dict] = []
+        for r in raw_results:
+            domain = urlparse(r.get("url", "")).netloc
+            if domain and domain not in seen:
+                seen.add(domain)
+                unique.append(r)
+
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(unique, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"  [cache] Saved search results to {cache_file}")
 
     print(f"  {len(unique)} unique domains found, scoring...")
 

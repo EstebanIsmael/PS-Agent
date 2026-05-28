@@ -12,6 +12,9 @@ data/style_examples/
 # Outputs generados
 output/
 
+# Cache de búsquedas del discovery agent
+cache/
+
 # Python
 __pycache__/
 *.py[cod]
