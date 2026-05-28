@@ -4,9 +4,11 @@ Agent 1 — Discovery
 Estrategia:
   1. Exa deep search (structured output) — búsqueda profunda con razonamiento,
      devuelve lista de empresas ya estructurada.
-  2. Exa/DuckDuckGo regular search — amplía el alcance con más queries.
-  3. GPT score — puntúa y rankea los resultados del paso 2.
-  4. Combina ambas listas y devuelve las top-15.
+  2. Exa/DuckDuckGo regular search — amplía el alcance con más queries (15 queries,
+     ángulos variados incluyendo LinkedIn, Crunchbase, G2, ProductHunt).
+  3. GPT score — puntúa y rankea los resultados del paso 2, devuelve evidence
+     (direct quote + source URL) por cada requirement.
+  4. Combina ambas listas y devuelve las top-50.
 """
 
 import json
@@ -65,7 +67,7 @@ def discover_companies(requirements: Requirement) -> list[CandidateCompany]:
             deduped.append(c)
 
     print(f"[Discovery] Done — {len(deduped)} candidates total")
-    return deduped[:15]
+    return deduped[:50]
 
 
 # ── Exa deep search ───────────────────────────────────────────────────────────
@@ -137,7 +139,7 @@ def _regular_search_and_score(requirements: Requirement) -> list[CandidateCompan
 
     raw_results: list[dict] = []
     for query in queries:
-        results = search_companies(query, num_results=12)
+        results = search_companies(query, num_results=15)
         raw_results.extend(results)
 
     # Deduplicar por dominio
@@ -160,14 +162,18 @@ def _regular_search_and_score(requirements: Requirement) -> list[CandidateCompan
 
 
 def _generate_queries(requirements: Requirement) -> list[str]:
-    prompt = f"""Generate 8 specific web search queries to discover companies matching these requirements.
-Use varied angles: technology type, geography, industry reports, company databases.
+    prompt = f"""Generate 15 specific web search queries to discover companies matching these requirements.
+Use varied angles — mix all of these:
+- General: technology type, industry vertical, use case description
+- Directories: queries with "site:linkedin.com/company", "site:crunchbase.com/organization", "site:g2.com", "site:producthunt.com"
+- Listicles: "top companies", "best tools", "leading providers" for this space
+- Technical: specific tech stack terms, integrations, or certifications implied by the requirements
 
 Must-have: {", ".join(requirements.must_have)}
 Desirable: {", ".join(requirements.desirable)}
 
 Return JSON: {{"queries": ["query1", ...]}}
-Focus on finding actual company websites and profiles."""
+Focus on finding actual company websites and profiles, not news or Wikipedia."""
 
     r = _client.chat.completions.create(
         model=settings.llm_model,
@@ -183,6 +189,8 @@ def _score_batch(
     if not raw_results:
         return []
 
+    all_requirements = requirements.must_have + requirements.desirable
+
     prompt = f"""Evaluate these search results for a company research database.
 
 Requirements:
@@ -196,7 +204,27 @@ Be INCLUSIVE: include anything that could plausibly be a matching company, even 
 Skip only clearly irrelevant pages (Wikipedia general articles, news outlets, trade associations).
 Scores: 0.8-1.0 strong match | 0.5-0.7 partial | 0.2-0.4 weak but possible.
 
-Return JSON: {{"companies": [{{"name":"...","url":"...","score":0.0,"score_breakdown":{{}},"summary":"one sentence"}}]}}"""
+For each company, provide evidence for every requirement: a direct quote from the search result snippet
+that justifies whether it meets that requirement, and the source URL where you found it.
+If there is no evidence for a requirement, set quote to "" and source_url to "".
+
+Return JSON:
+{{
+  "companies": [
+    {{
+      "name": "...",
+      "url": "...",
+      "score": 0.0,
+      "score_breakdown": {{}},
+      "summary": "one sentence",
+      "evidence": {{
+        "<requirement text>": {{"quote": "exact words from the snippet", "source_url": "https://..."}}
+      }}
+    }}
+  ]
+}}
+
+The evidence keys must be exactly these requirements: {json.dumps(all_requirements)}"""
 
     r = _client.chat.completions.create(
         model=settings.llm_model,
@@ -217,6 +245,7 @@ Return JSON: {{"companies": [{{"name":"...","url":"...","score":0.0,"score_break
                 score=score,
                 score_breakdown=c.get("score_breakdown", {}),
                 summary=c.get("summary", ""),
+                evidence=c.get("evidence", {}),
             ))
         except Exception as e:
             print(f"  [score] parse error: {e}")

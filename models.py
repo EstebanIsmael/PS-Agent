@@ -14,6 +14,7 @@ class CandidateCompany(BaseModel):
     score: float
     score_breakdown: dict = Field(default_factory=dict)
     summary: str
+    evidence: dict = Field(default_factory=dict)  # requirement -> {quote, source_url}
 
 
 class Document(BaseModel):
