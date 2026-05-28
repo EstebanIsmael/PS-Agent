@@ -68,3 +68,40 @@ def save_profiles(profiles: list[dict], output_dir: str = "output") -> None:
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(profile, f, indent=2, ensure_ascii=False, default=str)
         print(f"  Saved: {filepath}")
+
+
+def save_discovery_txt(candidates: list[dict], output_dir: str = "output") -> Path:
+    Path(output_dir).mkdir(exist_ok=True)
+    filepath = Path(output_dir) / "discovery_results.txt"
+
+    lines = ["DISCOVERY RESULTS", "=" * 60, ""]
+
+    for i, c in enumerate(candidates, 1):
+        lines.append(f"{i:2}. {c['name']}")
+        lines.append(f"    Score : {c['score']:.2f}")
+        lines.append(f"    URL   : {c['url']}")
+        if c.get("summary"):
+            lines.append(f"    Note  : {c['summary']}")
+
+        if c.get("score_breakdown"):
+            lines.append("    Score breakdown:")
+            for criterion, val in c["score_breakdown"].items():
+                lines.append(f"      - {criterion}: {val}")
+
+        evidence = c.get("evidence", {})
+        if evidence:
+            lines.append("    Evidence per requirement:")
+            for req, ev in evidence.items():
+                quote = ev.get("quote", "")
+                source = ev.get("source_url", "")
+                if quote or source:
+                    lines.append(f"      [{req}]")
+                    if quote:
+                        lines.append(f"        Quote : \"{quote}\"")
+                    if source:
+                        lines.append(f"        Source: {source}")
+
+        lines.append("")
+
+    filepath.write_text("\n".join(lines), encoding="utf-8")
+    return filepath

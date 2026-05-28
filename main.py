@@ -14,7 +14,7 @@ Flujo:
 
 from pathlib import Path
 
-from graph import run_discovery, run_research, run_writer, save_profiles
+from graph import run_discovery, run_research, run_writer, save_profiles, save_discovery_txt
 from rag.style_rag import build_style_index
 from tools.questions_loader import load_questions
 from tools.requirements_loader import load_requirements
@@ -75,6 +75,9 @@ def run() -> None:
         print(f"       Score : {c['score']:.2f}")
         print(f"       URL   : {c['url']}")
         print(f"       Note  : {c['summary']}")
+
+    txt_path = save_discovery_txt(candidates)
+    print(f"\n[Discovery] Results saved to {txt_path}")
 
     # ── Human checkpoint ─────────────────────────────────────────────────────
     print("\nEnter the numbers to research (comma-separated, e.g. 1,3,5):")
