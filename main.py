@@ -18,6 +18,7 @@ Para agregar una empresa manualmente en candidates.json:
 
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from graph import run_discovery, run_research, run_writer, save_profiles, save_discovery_txt
@@ -34,8 +35,16 @@ REQUIREMENTS_FILE = "requirements_example.csv"
 QUESTIONS_FILE = "questions_example.csv"
 
 OUTPUT_DIR = Path("output")
-CANDIDATES_FILE = OUTPUT_DIR / "candidates.json"
-RESEARCH_FILE   = OUTPUT_DIR / "research.json"
+
+
+def _ts() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _latest(pattern: str) -> Path | None:
+    """Return the most recently modified file matching a glob pattern."""
+    files = sorted(OUTPUT_DIR.glob(pattern), key=lambda f: f.stat().st_mtime, reverse=True)
+    return files[0] if files else None
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -81,29 +90,32 @@ def cmd_discover() -> None:
         if c.get('summary'):
             print(f"       Note  : {c['summary']}")
 
-    # Guardar candidates.json
+    ts = _ts()
     OUTPUT_DIR.mkdir(exist_ok=True)
-    CANDIDATES_FILE.write_text(json.dumps(candidates, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    # Guardar discovery_results.txt
-    txt_path = save_discovery_txt(candidates)
+    candidates_file = OUTPUT_DIR / f"candidates_{ts}.json"
+    candidates_file.write_text(json.dumps(candidates, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    txt_path = save_discovery_txt(candidates, txt_suffix=ts)
 
     print(f"\n[Discovery] Saved {len(candidates)} candidates to:")
-    print(f"  {CANDIDATES_FILE}  ← editá este archivo para seleccionar/agregar empresas")
+    print(f"  {candidates_file}  ← editá este archivo para seleccionar/agregar empresas")
     print(f"  {txt_path}")
-    print("\nPróximo paso: editá candidates.json y corré  python main.py research")
+    print("\nPróximo paso: editá el candidates JSON y corré  python main.py research")
 
 
 # ── Comando: research ─────────────────────────────────────────────────────────
 
 def cmd_research() -> None:
-    if not CANDIDATES_FILE.exists():
-        print(f"[Error] No se encontró {CANDIDATES_FILE}. Corré primero: python main.py discover")
+    candidates_file = _latest("candidates_*.json")
+    if not candidates_file:
+        print("[Error] No se encontró ningún candidates_*.json en output/. Corré primero: python main.py discover")
         return
 
-    candidates = json.loads(CANDIDATES_FILE.read_text(encoding="utf-8"))
+    print(f"[Research] Using {candidates_file}")
+    candidates = json.loads(candidates_file.read_text(encoding="utf-8"))
     if not candidates:
-        print(f"[Error] {CANDIDATES_FILE} está vacío.")
+        print(f"[Error] {candidates_file} está vacío.")
         return
 
     print(f"\n[Research] {len(candidates)} companies to research:")
@@ -117,8 +129,10 @@ def cmd_research() -> None:
     approved = [{"name": c["name"], "url": c.get("url", "")} for c in candidates]
     research_results = run_research(approved)
 
+    ts = _ts()
     OUTPUT_DIR.mkdir(exist_ok=True)
-    RESEARCH_FILE.write_text(
+    research_file = OUTPUT_DIR / f"research_{ts}.json"
+    research_file.write_text(
         json.dumps({"companies": approved, "results": research_results}, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
@@ -126,7 +140,7 @@ def cmd_research() -> None:
     ok  = sum(1 for v in research_results.values() if "error" not in v)
     err = len(research_results) - ok
     print(f"\n[Research] Done — {ok} OK, {err} errors")
-    print(f"  Saved to {RESEARCH_FILE}")
+    print(f"  Saved to {research_file}")
     print("\nPróximo paso: python main.py write")
 
 
@@ -135,11 +149,13 @@ def cmd_research() -> None:
 def cmd_write() -> None:
     ensure_style_index()
 
-    if not RESEARCH_FILE.exists():
-        print(f"[Error] No se encontró {RESEARCH_FILE}. Corré primero: python main.py research")
+    research_file = _latest("research_*.json")
+    if not research_file:
+        print("[Error] No se encontró ningún research_*.json en output/. Corré primero: python main.py research")
         return
 
-    data = json.loads(RESEARCH_FILE.read_text(encoding="utf-8"))
+    print(f"[Writer] Using {research_file}")
+    data = json.loads(research_file.read_text(encoding="utf-8"))
     approved        = data["companies"]
     research_results = data["results"]
 
@@ -156,7 +172,7 @@ def cmd_write() -> None:
     print("\n" + "=" * 60)
     if profiles:
         print(f"Done — {len(profiles)} profile(s) generated")
-        save_profiles(profiles)
+        save_profiles(profiles, ts=_ts())
         print("Files saved in /output")
     else:
         print("No profiles generated. Check errors above.")

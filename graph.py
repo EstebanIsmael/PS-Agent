@@ -59,20 +59,22 @@ def run_writer(
     return profiles
 
 
-def save_profiles(profiles: list[dict], output_dir: str = "output") -> None:
+def save_profiles(profiles: list[dict], output_dir: str = "output", ts: str = "") -> None:
     Path(output_dir).mkdir(exist_ok=True)
     for profile in profiles:
         company = profile["company"]
-        filename = company.lower().replace(" ", "_") + "_profile.json"
+        suffix = f"_{ts}" if ts else ""
+        filename = company.lower().replace(" ", "_") + f"_profile{suffix}.json"
         filepath = Path(output_dir) / filename
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(profile, f, indent=2, ensure_ascii=False, default=str)
         print(f"  Saved: {filepath}")
 
 
-def save_discovery_txt(candidates: list[dict], output_dir: str = "output") -> Path:
+def save_discovery_txt(candidates: list[dict], output_dir: str = "output", txt_suffix: str = "") -> Path:
     Path(output_dir).mkdir(exist_ok=True)
-    filepath = Path(output_dir) / "discovery_results.txt"
+    suffix = f"_{txt_suffix}" if txt_suffix else ""
+    filepath = Path(output_dir) / f"discovery_results{suffix}.txt"
 
     lines = ["DISCOVERY RESULTS", "=" * 60, ""]
 
