@@ -2,20 +2,29 @@
 Entry point del sistema completo.
 
 Uso — pasos independientes:
-  python main.py discover              Busca empresas y guarda output/candidates.json
-  python main.py research              Investiga las empresas en output/candidates.json
-  python main.py write                 Genera perfiles desde output/research.json
+  python main.py discover              Busca empresas y guarda output/candidates_<ts>.json
+  python main.py import <archivo.csv>  Convierte una lista CSV a candidates_<ts>.json
+  python main.py research              Investiga las empresas del candidates más reciente
+  python main.py write                 Genera perfiles desde el research más reciente
 
-Flujo típico:
-  1. Correr discover  → revisar output/discovery_results.txt y output/candidates.json
-  2. Editar candidates.json: borrar empresas que no te interesan, agregar nuevas manualmente
-  3. Correr research
-  4. Correr write → JSONs de perfiles en output/
+Flujo con discovery:
+  1. python main.py discover
+  2. Revisar output/discovery_results_<ts>.txt
+  3. python main.py research
 
-Para agregar una empresa manualmente en candidates.json:
-  {"name": "Acme Corp", "url": "https://acme.com", "score": 1.0, "score_breakdown": {}, "summary": "", "evidence": {}}
+Flujo con lista propia:
+  1. Llenar companies_list.csv con tus empresas
+  2. python main.py import companies_list.csv
+  3. python main.py research
+  4. python main.py write
+
+Formato de companies_list.csv:
+  name,url,technology_name,technology_url
+  "Kyhe Technology",https://kyhe.com,DH-S Titanium Powder,https://kyhe.com/product/...
+  "Otra Empresa",https://otra.com,,
 """
 
+import csv
 import json
 import sys
 from datetime import datetime
@@ -179,10 +188,75 @@ def cmd_write() -> None:
     print("=" * 60)
 
 
+# ── Comando: import ───────────────────────────────────────────────────────────
+
+def cmd_import() -> None:
+    if len(sys.argv) < 3:
+        print("Uso: python main.py import <archivo.csv>")
+        print("\nFormato del CSV (con encabezado):")
+        print("  name,url,technology_name,technology_url")
+        print('  "Kyhe Technology",https://kyhe.com,DH-S Titanium Powder,https://kyhe.com/product/...')
+        print('  "Otra Empresa",https://otra.com,,')
+        sys.exit(1)
+
+    input_file = Path(sys.argv[2])
+    if not input_file.exists():
+        print(f"[Error] No se encontró el archivo: {input_file}")
+        sys.exit(1)
+
+    candidates = []
+    with open(input_file, encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        for i, row in enumerate(reader, 1):
+            name = row.get("name", "").strip()
+            url  = row.get("url",  "").strip()
+            if not name:
+                print(f"  [warn] Fila {i} sin nombre — saltada")
+                continue
+
+            # Guardar tecnología como evidence para que research tenga contexto
+            evidence = {}
+            tech_name = row.get("technology_name", "").strip()
+            tech_url  = row.get("technology_url",  "").strip()
+            if tech_name or tech_url:
+                evidence["technology"] = {
+                    "quote":      tech_name,
+                    "source_url": tech_url,
+                }
+
+            candidates.append({
+                "name":            name,
+                "url":             url,
+                "score":           1.0,
+                "score_breakdown": {},
+                "summary":         f"{tech_name}" if tech_name else "",
+                "evidence":        evidence,
+            })
+
+    if not candidates:
+        print("[Error] No se encontraron empresas válidas en el archivo.")
+        sys.exit(1)
+
+    ts = _ts()
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    candidates_file = OUTPUT_DIR / f"candidates_{ts}.json"
+    candidates_file.write_text(json.dumps(candidates, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    print(f"[Import] {len(candidates)} empresas importadas desde '{input_file}':")
+    for c in candidates:
+        tech = c["evidence"].get("technology", {})
+        tech_str = f"  → {tech['quote']}" if tech.get("quote") else ""
+        print(f"  - {c['name']}  ({c['url']}){tech_str}")
+
+    print(f"\n[Import] Guardado en {candidates_file}")
+    print("Próximo paso: python main.py research")
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 COMMANDS = {
     "discover": cmd_discover,
+    "import":   cmd_import,
     "research": cmd_research,
     "write":    cmd_write,
 }
@@ -190,9 +264,10 @@ COMMANDS = {
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
         print("Uso:")
-        print("  python main.py discover    — busca empresas")
-        print("  python main.py research    — investiga empresas en output/candidates.json")
-        print("  python main.py write       — genera perfiles desde output/research.json")
+        print("  python main.py discover              — busca empresas automáticamente")
+        print("  python main.py import <archivo.csv>  — importa tu propia lista de empresas")
+        print("  python main.py research              — investiga empresas del candidates más reciente")
+        print("  python main.py write                 — genera perfiles desde el research más reciente")
         sys.exit(1)
 
     COMMANDS[sys.argv[1]]()
