@@ -11,14 +11,14 @@ def search_company_info(company: str, num_results: int = 10) -> list[Document]:
         return _search_duckduckgo(query, company, num_results)
 
 
-def search_company_question(company: str, question: str, num_results: int = 3) -> list[Document]:
-    """Targeted search for a specific question about a company."""
-    query = f"{company} {question}"
+def search_company_question(query: str, company: str, num_results: int = 3) -> list[Document]:
+    """Targeted search using a pre-built query string."""
+    label = company or query
     try:
-        return _search_exa(query, company, num_results)
+        return _search_exa(query, label, num_results)
     except Exception as e:
         print(f"    [search] Exa failed ({e}), using DuckDuckGo fallback")
-        return _search_duckduckgo(query, company, num_results)
+        return _search_duckduckgo(query, label, num_results)
 
 
 def search_companies(query: str, num_results: int = 8) -> list[dict]:

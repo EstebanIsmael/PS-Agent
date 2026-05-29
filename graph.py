@@ -27,9 +27,17 @@ def run_research(approved_companies: list[dict], questions: list[str] | None = N
     results = {}
     for company_info in approved_companies:
         name = company_info["name"]
-        url = company_info["url"]
+        url  = company_info["url"]
+        tech = company_info.get("evidence", {}).get("technology", {})
+        technology_name = tech.get("quote", "")
+        technology_url  = tech.get("source_url", "")
         try:
-            result = research_company(name, url, questions=questions)
+            result = research_company(
+                name, url,
+                questions=questions,
+                technology_name=technology_name,
+                technology_url=technology_url,
+            )
             results[name] = result
         except Exception as e:
             print(f"[Research] ERROR for {name}: {e}")

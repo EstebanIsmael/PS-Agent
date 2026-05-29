@@ -139,7 +139,10 @@ def cmd_research() -> None:
     question_texts = [q.prompt_text() for q in questions]
     print(f"[Research] Using {len(question_texts)} questions from '{QUESTIONS_FILE}' to guide search")
 
-    approved = [{"name": c["name"], "url": c.get("url", "")} for c in candidates]
+    approved = [
+        {"name": c["name"], "url": c.get("url", ""), "evidence": c.get("evidence", {})}
+        for c in candidates
+    ]
     research_results = run_research(approved, questions=question_texts)
 
     ts = _ts()

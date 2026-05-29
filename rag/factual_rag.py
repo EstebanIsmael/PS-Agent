@@ -19,12 +19,20 @@ def _extracted_path(company: str) -> Path:
     return Path(settings.company_indexes_dir) / f"{safe}_extracted.json"
 
 
-def _extract_from_doc(doc: Document, questions: list[str]) -> dict[str, str | None]:
+def _extract_from_doc(
+    doc: Document, questions: list[str], technology_name: str = ""
+) -> dict[str, str | None]:
     """One GPT call per document — extracts relevant quotes for all questions at once."""
+    tech_filter = (
+        f"\nIMPORTANT: Extract information ONLY about '{technology_name}'. "
+        f"Ignore any information about other products or technologies mentioned in the document."
+        if technology_name else ""
+    )
+
     prompt = f"""Read this document and extract relevant information for each question.
 For each question, copy the EXACT sentence(s) from the document that answer it.
 If the document has nothing relevant for a question, return null for that question.
-Do not paraphrase — use the document's exact words.
+Do not paraphrase — use the document's exact words.{tech_filter}
 
 Document source: {doc.source}
 Document text:
@@ -52,7 +60,10 @@ Return JSON where keys are the exact question texts:
 
 
 def extract_structured_facts(
-    company: str, documents: list[Document], questions: list[str]
+    company: str,
+    documents: list[Document],
+    questions: list[str],
+    technology_name: str = "",
 ) -> dict[str, list[dict]]:
     """
     For each document, extract quotes per question in one GPT call.
@@ -69,7 +80,7 @@ def extract_structured_facts(
     accumulated: dict[str, list[dict]] = {q: [] for q in questions}
 
     for i, doc in enumerate(useful_docs, 1):
-        extractions = _extract_from_doc(doc, questions)
+        extractions = _extract_from_doc(doc, questions, technology_name=technology_name)
         added = 0
         for q, quote in extractions.items():
             if q in accumulated and quote and str(quote).lower() not in ("null", "none", ""):

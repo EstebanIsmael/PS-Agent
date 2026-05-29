@@ -25,19 +25,43 @@ _HEADERS = {
 }
 
 
-def research_company(company: str, url: str, questions: list[str] | None = None) -> dict:
+def research_company(
+    company: str,
+    url: str,
+    questions: list[str] | None = None,
+    technology_name: str = "",
+    technology_url: str = "",
+) -> dict:
     print(f"\n[Research] === {company} ===")
+    if technology_name:
+        print(f"  Technology: {technology_name}")
     all_docs: list[Document] = []
 
-    # 1. Deep crawl
-    print("[Research] Crawling website...")
-    web_docs = crawl_website(company, url, max_pages=settings.max_pages_per_site)
-    print(f"  -> {len(web_docs)} pages")
+    # 1a. Focused crawl on technology URL (restricted to that subtree)
+    tech_docs: list[Document] = []
+    if technology_url and technology_url != url:
+        print(f"[Research] Crawling technology page (focused)...")
+        tech_docs = crawl_website(
+            company, technology_url,
+            max_pages=settings.max_pages_per_site,
+            restrict_to_subtree=True,
+        )
+        print(f"  -> {len(tech_docs)} technology pages")
+        all_docs.extend(tech_docs)
+
+    # 1b. General crawl of company homepage (fewer pages, complementary info)
+    general_max = max(5, settings.max_pages_per_site - len(tech_docs))
+    print(f"[Research] Crawling company homepage (general, max {general_max} pages)...")
+    web_docs = crawl_website(company, url, max_pages=general_max)
+    print(f"  -> {len(web_docs)} general pages")
     all_docs.extend(web_docs)
 
-    # 2. PDFs found on the site
+    # 2. PDFs — check both URLs
     print("[Research] Extracting PDFs...")
-    pdf_urls = _collect_pdf_urls(url)
+    pdf_urls = _collect_pdf_urls(technology_url or url)
+    if technology_url and technology_url != url:
+        pdf_urls += _collect_pdf_urls(url)
+    pdf_urls = list(dict.fromkeys(pdf_urls))  # deduplicate preserving order
     pdf_docs = []
     for pdf_url in pdf_urls[: settings.max_pdfs_per_site]:
         doc = extract_pdf_from_url(pdf_url, company, settings.max_pdf_pages)
@@ -46,9 +70,10 @@ def research_company(company: str, url: str, questions: list[str] | None = None)
     print(f"  -> {len(pdf_docs)} PDFs")
     all_docs.extend(pdf_docs)
 
-    # 3. External news / general search
+    # 3. External search — use technology name if available
     print("[Research] Fetching external sources...")
-    news_docs = search_company_info(company, num_results=10)
+    search_term = f"{company} {technology_name}" if technology_name else company
+    news_docs = search_company_info(search_term, num_results=10)
     print(f"  -> {len(news_docs)} news / search results")
     all_docs.extend(news_docs)
 
@@ -57,7 +82,8 @@ def research_company(company: str, url: str, questions: list[str] | None = None)
     if questions:
         print(f"[Research] Targeted search for {len(questions)} questions...")
         for q in questions:
-            docs = search_company_question(company, q, num_results=3)
+            term = f"{company} {technology_name} {q}" if technology_name else f"{company} {q}"
+            docs = search_company_question(term, "", num_results=3)
             question_docs.extend(docs)
         print(f"  -> {len(question_docs)} question-targeted results")
         all_docs.extend(question_docs)
@@ -65,7 +91,7 @@ def research_company(company: str, url: str, questions: list[str] | None = None)
     # 5. Structured extraction: one GPT call per doc, all questions at once
     if questions:
         print("[Research] Extracting structured facts per question...")
-        extract_structured_facts(company, all_docs, questions)
+        extract_structured_facts(company, all_docs, questions, technology_name=technology_name)
 
     # 6. Build vector index
     print("[Research] Building vector index...")
@@ -73,7 +99,8 @@ def research_company(company: str, url: str, questions: list[str] | None = None)
 
     return {
         "company": company,
-        "pages_crawled": len(web_docs),
+        "tech_pages_crawled": len(tech_docs),
+        "general_pages_crawled": len(web_docs),
         "pdfs_extracted": len(pdf_docs),
         "news_fetched": len(news_docs),
         "question_targeted": len(question_docs),

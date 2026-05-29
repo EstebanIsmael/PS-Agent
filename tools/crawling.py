@@ -72,10 +72,23 @@ def find_pdf_links(base_url: str, html: str) -> list[str]:
     return pdfs
 
 
-def crawl_website(company: str, base_url: str, max_pages: int = 30) -> list[Document]:
+def crawl_website(
+    company: str,
+    base_url: str,
+    max_pages: int = 30,
+    restrict_to_subtree: bool = False,
+) -> list[Document]:
+    """
+    Crawl a website starting from base_url.
+    If restrict_to_subtree=True, only follow links that start with base_url's path
+    (useful for crawling a specific product/technology section).
+    """
     visited: set[str] = set()
     queue: list[str] = [base_url]
     documents: list[Document] = []
+
+    # When restricting to subtree, links must share the same path prefix
+    base_path = urlparse(base_url).path.rstrip("/")
 
     while queue and len(visited) < max_pages:
         url = queue.pop(0)
@@ -97,8 +110,13 @@ def crawl_website(company: str, base_url: str, max_pages: int = 30) -> list[Docu
             ))
 
         for link in _internal_links(base_url, html):
-            if link not in visited and link not in queue:
-                queue.append(link)
+            if link in visited or link in queue:
+                continue
+            if restrict_to_subtree:
+                link_path = urlparse(link).path.rstrip("/")
+                if not link_path.startswith(base_path):
+                    continue
+            queue.append(link)
 
         time.sleep(CRAWL_DELAY)
 
