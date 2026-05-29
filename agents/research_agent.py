@@ -9,7 +9,7 @@ Para cada empresa aprobada:
 
 from config import settings
 from models import Document
-from rag.factual_rag import build_factual_index
+from rag.factual_rag import build_factual_index, extract_structured_facts
 from tools.crawling import crawl_website, find_pdf_links
 from tools.pdf_extractor import extract_pdf_from_url
 from tools.search import search_company_info, search_company_question
@@ -53,16 +53,21 @@ def research_company(company: str, url: str, questions: list[str] | None = None)
     all_docs.extend(news_docs)
 
     # 4. Targeted search per question
+    question_docs: list[Document] = []
     if questions:
         print(f"[Research] Targeted search for {len(questions)} questions...")
-        question_docs: list[Document] = []
         for q in questions:
             docs = search_company_question(company, q, num_results=3)
             question_docs.extend(docs)
         print(f"  -> {len(question_docs)} question-targeted results")
         all_docs.extend(question_docs)
 
-    # 5. Build vector index
+    # 5. Structured extraction: one GPT call per doc, all questions at once
+    if questions:
+        print("[Research] Extracting structured facts per question...")
+        extract_structured_facts(company, all_docs, questions)
+
+    # 6. Build vector index
     print("[Research] Building vector index...")
     store = build_factual_index(company, all_docs)
 
@@ -71,7 +76,7 @@ def research_company(company: str, url: str, questions: list[str] | None = None)
         "pages_crawled": len(web_docs),
         "pdfs_extracted": len(pdf_docs),
         "news_fetched": len(news_docs),
-        "question_targeted": len(question_docs) if questions else 0,
+        "question_targeted": len(question_docs),
         "chunks_indexed": store.size,
         "sources": sorted(set(d.source for d in all_docs)),
     }
