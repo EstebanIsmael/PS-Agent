@@ -1,17 +1,23 @@
 """
 Entry point del sistema completo.
 
-Uso:
-  python main.py
+Uso — pasos independientes:
+  python main.py discover              Busca empresas y guarda output/candidates.json
+  python main.py research              Investiga las empresas en output/candidates.json
+  python main.py write                 Genera perfiles desde output/research.json
 
-Flujo:
-  1. Agent 1 busca empresas segun REQUIREMENTS y muestra las top-20.
-  2. Vos elegis cuales investigar (ej: 1,3,5).
-  3. Agent 2 investiga cada empresa.
-  4. Agent 3 escribe el perfil usando tu QUESTIONS_FILE.
-  5. JSONs guardados en /output.
+Flujo típico:
+  1. Correr discover  → revisar output/discovery_results.txt y output/candidates.json
+  2. Editar candidates.json: borrar empresas que no te interesan, agregar nuevas manualmente
+  3. Correr research
+  4. Correr write → JSONs de perfiles en output/
+
+Para agregar una empresa manualmente en candidates.json:
+  {"name": "Acme Corp", "url": "https://acme.com", "score": 1.0, "score_breakdown": {}, "summary": "", "evidence": {}}
 """
 
+import json
+import sys
 from pathlib import Path
 
 from graph import run_discovery, run_research, run_writer, save_profiles, save_discovery_txt
@@ -27,6 +33,10 @@ REQUIREMENTS_FILE = "requirements_example.csv"
 # CSV/XLSX con columnas: question, description (description es opcional)
 QUESTIONS_FILE = "questions_example.csv"
 
+OUTPUT_DIR = Path("output")
+CANDIDATES_FILE = OUTPUT_DIR / "candidates.json"
+RESEARCH_FILE   = OUTPUT_DIR / "research.json"
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -35,7 +45,6 @@ def ensure_style_index() -> None:
     style_dir.mkdir(parents=True, exist_ok=True)
 
     if Path("data/style_index.faiss").exists():
-        print("[Style RAG] Index already exists.")
         return
 
     csv_files = list(style_dir.glob("*.csv"))
@@ -48,17 +57,12 @@ def ensure_style_index() -> None:
     build_style_index()
 
 
-def run() -> None:
-    ensure_style_index()
+# ── Comando: discover ─────────────────────────────────────────────────────────
 
+def cmd_discover() -> None:
     requirements = load_requirements(REQUIREMENTS_FILE)
-    questions = load_questions(QUESTIONS_FILE)
-    questions_dicts = [{"name": q.name, "description": q.description} for q in questions]
+    print(f"[Requirements] {len(requirements.must_have)} must-have, {len(requirements.desirable)} desirable")
 
-    print(f"[Requirements] {len(requirements.must_have)} must-have, {len(requirements.desirable)} desirable — from '{REQUIREMENTS_FILE}'")
-    print(f"[Questions]    {len(questions)} questions — from '{QUESTIONS_FILE}'")
-
-    # ── Phase 1: Discovery ───────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("PHASE 1 — Discovery Agent")
     print("=" * 60)
@@ -74,48 +78,81 @@ def run() -> None:
         print(f"  {i:2}. {c['name']}")
         print(f"       Score : {c['score']:.2f}")
         print(f"       URL   : {c['url']}")
-        print(f"       Note  : {c['summary']}")
+        if c.get('summary'):
+            print(f"       Note  : {c['summary']}")
 
+    # Guardar candidates.json
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    CANDIDATES_FILE.write_text(json.dumps(candidates, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # Guardar discovery_results.txt
     txt_path = save_discovery_txt(candidates)
-    print(f"\n[Discovery] Results saved to {txt_path}")
 
-    # ── Human checkpoint ─────────────────────────────────────────────────────
-    print("\nEnter the numbers to research (comma-separated, e.g. 1,3,5):")
-    raw = input("> ").strip()
+    print(f"\n[Discovery] Saved {len(candidates)} candidates to:")
+    print(f"  {CANDIDATES_FILE}  ← editá este archivo para seleccionar/agregar empresas")
+    print(f"  {txt_path}")
+    print("\nPróximo paso: editá candidates.json y corré  python main.py research")
 
-    try:
-        selected_indices = [int(x.strip()) - 1 for x in raw.split(",")]
-    except ValueError:
-        print("Invalid input. Exiting.")
+
+# ── Comando: research ─────────────────────────────────────────────────────────
+
+def cmd_research() -> None:
+    if not CANDIDATES_FILE.exists():
+        print(f"[Error] No se encontró {CANDIDATES_FILE}. Corré primero: python main.py discover")
         return
 
-    approved = [
-        {"name": candidates[i]["name"], "url": candidates[i]["url"]}
-        for i in selected_indices
-        if 0 <= i < len(candidates)
-    ]
-
-    if not approved:
-        print("No valid selection. Exiting.")
+    candidates = json.loads(CANDIDATES_FILE.read_text(encoding="utf-8"))
+    if not candidates:
+        print(f"[Error] {CANDIDATES_FILE} está vacío.")
         return
 
-    print(f"\nSelected: {[c['name'] for c in approved]}")
+    print(f"\n[Research] {len(candidates)} companies to research:")
+    for c in candidates:
+        print(f"  - {c['name']}  ({c.get('url', 'no url')})")
 
-    # ── Phase 2: Research ────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("PHASE 2 — Research Agent")
     print("=" * 60)
 
+    approved = [{"name": c["name"], "url": c.get("url", "")} for c in candidates]
     research_results = run_research(approved)
 
-    # ── Phase 3: Writer ──────────────────────────────────────────────────────
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    RESEARCH_FILE.write_text(
+        json.dumps({"companies": approved, "results": research_results}, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+
+    ok  = sum(1 for v in research_results.values() if "error" not in v)
+    err = len(research_results) - ok
+    print(f"\n[Research] Done — {ok} OK, {err} errors")
+    print(f"  Saved to {RESEARCH_FILE}")
+    print("\nPróximo paso: python main.py write")
+
+
+# ── Comando: write ────────────────────────────────────────────────────────────
+
+def cmd_write() -> None:
+    ensure_style_index()
+
+    if not RESEARCH_FILE.exists():
+        print(f"[Error] No se encontró {RESEARCH_FILE}. Corré primero: python main.py research")
+        return
+
+    data = json.loads(RESEARCH_FILE.read_text(encoding="utf-8"))
+    approved        = data["companies"]
+    research_results = data["results"]
+
+    questions = load_questions(QUESTIONS_FILE)
+    questions_dicts = [{"name": q.name, "description": q.description} for q in questions]
+
+    print(f"\n[Writer] {len(approved)} companies, {len(questions)} questions")
     print("\n" + "=" * 60)
     print("PHASE 3 — Writer Agent")
     print("=" * 60)
 
     profiles = run_writer(approved, research_results, questions_dicts)
 
-    # ── Save output ──────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     if profiles:
         print(f"Done — {len(profiles)} profile(s) generated")
@@ -126,5 +163,20 @@ def run() -> None:
     print("=" * 60)
 
 
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+COMMANDS = {
+    "discover": cmd_discover,
+    "research": cmd_research,
+    "write":    cmd_write,
+}
+
 if __name__ == "__main__":
-    run()
+    if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
+        print("Uso:")
+        print("  python main.py discover    — busca empresas")
+        print("  python main.py research    — investiga empresas en output/candidates.json")
+        print("  python main.py write       — genera perfiles desde output/research.json")
+        sys.exit(1)
+
+    COMMANDS[sys.argv[1]]()
