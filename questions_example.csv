@@ -1,8 +1,52 @@
 question,description
-Founded year,Year the company was founded. Single year only (e.g. 2017).
-Headquarters location,City and country where the company is headquartered.
-Core technology,Main technology or process. 2-3 sentences max.
-Commercial stage,Current development stage: R&D / Pilot / Demo / Commercial scale.
-Revenue,Annual revenue in USD if publicly available.
-Key partnerships,Main commercial or strategic partners.
-Feedstock used,Raw materials or inputs used in the process.
+Reason for your recommendation,Highlight why you think this supplier can provide higher-quality recycled materials or can produce cosmetic parts with higher aspect ratio
+Value chain,Consumer part provider: companies that can make premium-looking finished metal housings
+Name,Hyperlink to company website. For university suppliers add the name of the research group.
+Country,
+Founded year,Not required for universities
+Number of employees,Not required for universities
+Technology / Product name,Hyperlink to technology page. Can be raw materials or a display component.
+Market status,On the market and to be launched are the priority. Under development technologies can be added only if very innovative and not yet on the market.
+Details to support market status,
+Launched year,"If still in development write /. If a tentative launch date is known include the year e.g. 2027 (tentative)."
+Description of the technology,Brief description of the technology. Maximum 3-4 sentences.
+% Recycled content,At least 15%. e.g. 75%
+Grades of titanium,"Preferred TA2 and TC4. e.g. TA2 and TC4"
+Composition,e.g. 75% recycled aluminium + 24% aluminium + 1% other
+Recommended Manufacturing Routes,"Identify the manufacturing methods recommended by the supplier for cosmetic applications. e.g. Recommended for CNC machining and forged cosmetic components."
+Surface Finish Compatibility,"Identify which cosmetic surface finishing processes are compatible with the material and whether any cosmetic finish limitations are reported. e.g. Compatible with anodizing, polishing, brushing, and bead blasting with good cosmetic consistency."
+Surface Appearance,It should be smooth and uniform
+Offering Format,"List all relevant formats offered. e.g. resin, pellet, powder, foil, or ingot. Filaments are out of scope."
+Thickness Availability,Multiple thickness options are required
+Detailed to support Optical performance,
+Scratch resistance,
+Defect(s),Should be free from defects
+Surface Hardness,
+Tensile Strength (MPa),Reference: Virgin PCTG is 45-65 MPa
+Other properties,
+Customization,Can the company customize the product according to client needs?
+Recyclable,
+Recycled content (%),e.g. 50%. Write / if not applicable.
+Waste Type,"e.g. post-industrial, pre-consumer"
+Waste source,e.g. industrial stamping scrap and post-consumer can waste
+Other sustainability features,
+Targeted Applications,"List applications claimed by the company. Be concise. e.g. E-vape (Mouthpieces, secondary Packaging), Automotive (chair). Focus on applications in electronics and display for tobacco."
+Collaboration,Any partner that helped develop the technology?
+Users,"Customers or brands currently using the material. Indicate brand name and what they use the material for."
+Use Cases in E-Cigarettes or Premium Consumer Electronics,"Identify whether the supplier or material has been used in e-cigarettes, vape devices, or premium consumer electronics involving appearance-critical metal components. e.g. Supplier reports use in anodized vape device housings and premium consumer electronics enclosures."
+Traceability,e.g. Traceability assured by ISCC certification
+Certificates,"Any certifications related to materials including sustainability, recycled content, traceability, mass balance. e.g. GRS certificate"
+Patent,"Yes or No. If yes, list 1-2 most notable patents related to the technology. e.g. EP0209882A2"
+Recycling Method,"Multiple options allowed. e.g. Chemical, Mechanical, Thermal. Write / if not relevant to recycling."
+Recycling Method Subtype,Multiple options allowed. Only add a new option if it is a genuinely new category.
+Description of recycling process,"Describe the recycling process including key steps and operating principles."
+Safety considerations (environment & human),Any concerns on human health or environmental impact — toxic substances used or generated as by-products during processing.
+Claimed Advantages / Benefits,
+Limitations,
+Stable quality,
+Reliable supply capability,
+Batch-to-batch consistency,"Provide batch quality data, performance consistency data for raw materials and final parts."
+Price,
+Current scale,e.g. industrial scale (40000 ton/year)
+Technical Data Sheet,Name of the document with hyperlink to it.
+Note,

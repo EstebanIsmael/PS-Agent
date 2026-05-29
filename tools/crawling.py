@@ -38,6 +38,15 @@ def _extract_text(html: str) -> str:
     return _clean_text(soup.get_text(separator=" "))
 
 
+# Matches language prefixes like /fr/, /zh-cn/, /pt-br/, etc.
+_LANG_PREFIX = re.compile(r"^/[a-z]{2}(/|$)|^/[a-z]{2}-[a-z]{2}(/|$)", re.IGNORECASE)
+
+
+def _is_lang_variant(url: str) -> bool:
+    path = urlparse(url).path
+    return bool(_LANG_PREFIX.match(path))
+
+
 def _internal_links(base_url: str, html: str) -> list[str]:
     base_domain = urlparse(base_url).netloc
     soup = BeautifulSoup(html, "lxml")
@@ -47,7 +56,8 @@ def _internal_links(base_url: str, html: str) -> list[str]:
         href = urljoin(base_url, a["href"]).split("#")[0].split("?")[0]
         parsed = urlparse(href)
         if parsed.netloc == base_domain and parsed.scheme in ("http", "https"):
-            links.add(href)
+            if not _is_lang_variant(href):
+                links.add(href)
 
     return list(links)
 
