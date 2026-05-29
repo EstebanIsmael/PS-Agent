@@ -23,13 +23,13 @@ def run_discovery(requirements: dict) -> list[dict]:
     return [c.model_dump() for c in candidates]
 
 
-def run_research(approved_companies: list[dict]) -> dict:
+def run_research(approved_companies: list[dict], questions: list[str] | None = None) -> dict:
     results = {}
     for company_info in approved_companies:
         name = company_info["name"]
         url = company_info["url"]
         try:
-            result = research_company(name, url)
+            result = research_company(name, url, questions=questions)
             results[name] = result
         except Exception as e:
             print(f"[Research] ERROR for {name}: {e}")
