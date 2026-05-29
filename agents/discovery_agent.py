@@ -13,6 +13,8 @@ Estrategia:
 
 import hashlib
 import json
+import re
+from difflib import SequenceMatcher
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -48,12 +50,34 @@ _COMPANY_SCHEMA = {
 }
 
 
+def _normalize_name(name: str) -> str:
+    """Lowercase, strip legal suffixes and punctuation for fuzzy comparison."""
+    suffixes = r"\b(corp|corporation|inc|incorporated|ltd|limited|llc|gmbh|s\.a\.|sa|co|company|group|holdings|technologies|tech|solutions|services)\b"
+    name = name.lower().strip()
+    name = re.sub(suffixes, "", name)
+    name = re.sub(r"[^a-z0-9 ]", "", name)
+    return name.strip()
+
+
+def _is_duplicate(name: str, seen_names: list[str], threshold: float = 0.85) -> bool:
+    norm = _normalize_name(name)
+    if not norm:
+        return False
+    for seen in seen_names:
+        ratio = SequenceMatcher(None, norm, seen).ratio()
+        if ratio >= threshold:
+            return True
+    return False
+
+
 def discover_companies(requirements: Requirement) -> list[CandidateCompany]:
     all_candidates: list[CandidateCompany] = []
 
     # ── 1. Exa deep search ───────────────────────────────────────────────────
     deep = _deep_search(requirements)
     print(f"[Discovery] Deep search: {len(deep)} companies")
+    if deep:
+        deep = _enrich_with_evidence(deep, requirements)
     all_candidates.extend(deep)
 
     # ── 2. Regular search + GPT score (complementario) ──────────────────────
@@ -61,17 +85,73 @@ def discover_companies(requirements: Requirement) -> list[CandidateCompany]:
     print(f"[Discovery] Regular search: {len(regular)} additional companies")
     all_candidates.extend(regular)
 
-    # ── 3. Deduplicar por nombre y URL ───────────────────────────────────────
-    seen: set[str] = set()
+    # ── 3. Deduplicar con fuzzy matching ─────────────────────────────────────
+    seen_normalized: list[str] = []
     deduped: list[CandidateCompany] = []
     for c in sorted(all_candidates, key=lambda x: x.score, reverse=True):
-        key = c.name.lower().strip()
-        if key and key not in seen:
-            seen.add(key)
+        if not c.name.strip():
+            continue
+        if not _is_duplicate(c.name, seen_normalized):
+            seen_normalized.append(_normalize_name(c.name))
             deduped.append(c)
 
-    print(f"[Discovery] Done — {len(deduped)} candidates total")
+    print(f"[Discovery] Done — {len(deduped)} unique candidates total")
     return deduped[:50]
+
+
+# ── Evidence enrichment for deep search results ───────────────────────────────
+
+def _enrich_with_evidence(
+    companies: list[CandidateCompany], requirements: Requirement
+) -> list[CandidateCompany]:
+    """Ask GPT to find evidence per requirement for each company using a web search snippet."""
+    all_requirements = requirements.must_have + requirements.desirable
+
+    # Build a compact list for the prompt
+    company_list = [{"name": c.name, "url": c.url, "summary": c.summary} for c in companies]
+
+    prompt = f"""You are given a list of companies and a set of requirements.
+For each company, provide evidence for every requirement: a direct quote or fact
+(from what you know about the company or its public website/summary) that justifies
+whether it meets that requirement, and the most relevant public URL where this can be verified.
+If you have no evidence for a requirement, set quote to "" and source_url to "".
+
+Requirements: {json.dumps(all_requirements)}
+
+Companies:
+{json.dumps(company_list, indent=2)}
+
+Return JSON:
+{{
+  "results": [
+    {{
+      "name": "...",
+      "evidence": {{
+        "<requirement text>": {{"quote": "...", "source_url": "https://..."}}
+      }}
+    }}
+  ]
+}}
+
+The evidence keys must be exactly: {json.dumps(all_requirements)}"""
+
+    try:
+        r = _client.chat.completions.create(
+            model=settings.llm_model,
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+        )
+        data = json.loads(r.choices[0].message.content)
+        evidence_map = {item["name"]: item.get("evidence", {}) for item in data.get("results", [])}
+
+        enriched = []
+        for c in companies:
+            enriched.append(c.model_copy(update={"evidence": evidence_map.get(c.name, {})}))
+        return enriched
+
+    except Exception as e:
+        print(f"  [enrich evidence] failed: {e}")
+        return companies
 
 
 # ── Exa deep search ───────────────────────────────────────────────────────────
