@@ -52,7 +52,11 @@ def research_company(
     # 1b. General crawl of company homepage (fewer pages, complementary info)
     general_max = max(5, settings.max_pages_per_site - len(tech_docs))
     print(f"[Research] Crawling company homepage (general, max {general_max} pages)...")
-    web_docs = crawl_website(company, url, max_pages=general_max)
+    web_docs = crawl_website(
+        company, url,
+        max_pages=general_max,
+        technology_name=technology_name,
+    )
     print(f"  -> {len(web_docs)} general pages")
     all_docs.extend(web_docs)
 
@@ -81,14 +85,28 @@ def research_company(
     question_docs: list[Document] = []
     if questions:
         print(f"[Research] Targeted search for {len(questions)} questions...")
+        seen_search_urls: set[str] = set(d.source for d in all_docs)
         for q in questions:
             term = f"{company} {technology_name} {q}" if technology_name else f"{company} {q}"
-            docs = search_company_question(term, "", num_results=3)
-            question_docs.extend(docs)
-        print(f"  -> {len(question_docs)} question-targeted results")
+            for doc in search_company_question(term, "", num_results=3):
+                if doc.source not in seen_search_urls:
+                    seen_search_urls.add(doc.source)
+                    question_docs.append(doc)
+        print(f"  -> {len(question_docs)} question-targeted results (deduplicated)")
         all_docs.extend(question_docs)
 
-    # 5. Structured extraction: one GPT call per doc, all questions at once
+    # 5. Deduplicate all docs by URL before extraction
+    seen_urls: set[str] = set()
+    unique_docs: list[Document] = []
+    for doc in all_docs:
+        if doc.source not in seen_urls:
+            seen_urls.add(doc.source)
+            unique_docs.append(doc)
+    if len(unique_docs) < len(all_docs):
+        print(f"[Research] Deduplication: {len(all_docs)} → {len(unique_docs)} unique docs")
+    all_docs = unique_docs
+
+    # 6. Structured extraction: one GPT call per doc, all questions at once
     if questions:
         print("[Research] Extracting structured facts per question...")
         extract_structured_facts(company, all_docs, questions, technology_name=technology_name)

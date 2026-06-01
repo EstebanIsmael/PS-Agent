@@ -72,11 +72,40 @@ def find_pdf_links(base_url: str, html: str) -> list[str]:
     return pdfs
 
 
+def _tech_keywords(technology_name: str) -> set[str]:
+    """Extract meaningful lowercase keywords from a technology name for URL matching."""
+    stopwords = {"the", "a", "an", "of", "for", "and", "or", "by", "in", "with"}
+    words = re.sub(r"[^a-z0-9 ]", " ", technology_name.lower()).split()
+    return {w for w in words if len(w) > 2 and w not in stopwords}
+
+
+def _url_matches_other_product(url: str, tech_keywords: set[str]) -> bool:
+    """
+    Returns True if the URL path contains a product-like segment that shares
+    NO keywords with the target technology — likely a different product page.
+    Only filters paths with clear product segments (e.g. /product/, /solution/, /material/).
+    """
+    if not tech_keywords:
+        return False
+    path = urlparse(url).path.lower()
+    product_sections = re.findall(
+        r"(?:product|solution|material|technology|service)s?/([^/]+)", path
+    )
+    if not product_sections:
+        return False
+    for segment in product_sections:
+        segment_words = set(re.sub(r"[^a-z0-9 ]", " ", segment).split())
+        if segment_words and segment_words.isdisjoint(tech_keywords):
+            return True
+    return False
+
+
 def crawl_website(
     company: str,
     base_url: str,
     max_pages: int = 30,
     restrict_to_subtree: bool = False,
+    technology_name: str = "",
 ) -> list[Document]:
     """
     Crawl a website starting from base_url.
@@ -86,14 +115,22 @@ def crawl_website(
     visited: set[str] = set()
     queue: list[str] = [base_url]
     documents: list[Document] = []
+    skipped_product = 0
 
-    # When restricting to subtree, links must share the same path prefix
     base_path = urlparse(base_url).path.rstrip("/")
+    tech_kw = _tech_keywords(technology_name)
 
     while queue and len(visited) < max_pages:
         url = queue.pop(0)
         if url in visited:
             continue
+
+        # Filter out pages that clearly belong to a different product
+        if not restrict_to_subtree and _url_matches_other_product(url, tech_kw):
+            skipped_product += 1
+            visited.add(url)
+            continue
+
         visited.add(url)
 
         html = _fetch_html(url)
@@ -119,5 +156,8 @@ def crawl_website(
             queue.append(link)
 
         time.sleep(CRAWL_DELAY)
+
+    if skipped_product:
+        print(f"    [crawl] skipped {skipped_product} pages from other products")
 
     return documents
