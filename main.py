@@ -215,16 +215,20 @@ def cmd_import() -> None:
     with open(input_file, encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         for i, row in enumerate(reader, 1):
-            name = row.get("name", "").strip()
-            url  = row.get("url",  "").strip()
+            def _get(key):
+                v = row.get(key)
+                return str(v).strip() if v is not None and str(v).lower() != "nan" else ""
+
+            name = _get("name")
+            url  = _get("url")
             if not name:
                 print(f"  [warn] Fila {i} sin nombre — saltada")
                 continue
 
             # Guardar tecnología como evidence para que research tenga contexto
             evidence = {}
-            tech_name = row.get("technology_name", "").strip()
-            tech_url  = row.get("technology_url",  "").strip()
+            tech_name = _get("technology_name")
+            tech_url  = _get("technology_url")
             if tech_name or tech_url:
                 evidence["technology"] = {
                     "quote":      tech_name,
