@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 from openai import OpenAI
@@ -10,6 +11,38 @@ from tools.embeddings import embed_query, embed_texts
 from tools.faiss_store import FAISSStore
 
 _client = OpenAI(api_key=settings.openai_api_key)
+
+
+# ── Text sanitization ─────────────────────────────────────────────────────────
+
+def _sanitize(text: str) -> str:
+    """
+    Remove characters that cause JSON parsing failures when GPT copies them
+    verbatim into a JSON string:
+      - ASCII control characters (null bytes, form feeds, etc.)
+      - Lone backslashes not part of a valid JSON escape (\", \\, \/, \b, \f, \n, \r, \t)
+        These turn into invalid \uXXXX sequences in the GPT response.
+    """
+    # Strip control characters except tab, newline, carriage return
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+    # Replace lone backslashes (not followed by a valid JSON escape char)
+    text = re.sub(r'\\(?!["\\/bfnrt])', ' ', text)
+    return text
+
+
+def _safe_json_loads(raw: str) -> dict:
+    """
+    Parse JSON from GPT. Falls back to fixing invalid \\uXXXX escapes
+    (e.g. '\\u' not followed by exactly 4 hex digits) before retrying.
+    """
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        fixed = re.sub(r'\\u(?![0-9a-fA-F]{4})', r'\\\\u', raw)
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            return {}
 
 
 # ── Structured extraction ─────────────────────────────────────────────────────
@@ -29,6 +62,8 @@ def _extract_from_doc(
         if technology_name else ""
     )
 
+    safe_text = _sanitize(doc.text[:4000])
+
     prompt = f"""Read this document and extract relevant information for each question.
 For each question, copy the EXACT sentence(s) from the document that answer it.
 If the document has nothing relevant for a question, return null for that question.
@@ -36,7 +71,7 @@ Do not paraphrase — use the document's exact words.{tech_filter}
 
 Document source: {doc.source}
 Document text:
-{doc.text[:4000]}
+{safe_text}
 
 Questions: {json.dumps(questions)}
 
@@ -53,7 +88,7 @@ Return JSON where keys are the exact question texts:
             response_format={"type": "json_object"},
             temperature=0,
         )
-        return json.loads(r.choices[0].message.content)
+        return _safe_json_loads(r.choices[0].message.content)
     except Exception as e:
         print(f"    [extract] failed for {doc.source}: {e}")
         return {}
@@ -124,7 +159,7 @@ Keep each phrase under 8 words. Do not repeat the original question."""
             response_format={"type": "json_object"},
             temperature=0,
         )
-        data = json.loads(r.choices[0].message.content)
+        data = _safe_json_loads(r.choices[0].message.content)
         phrases = data.get("phrases", [])
         return [question] + phrases  # original + expansiones
     except Exception:
