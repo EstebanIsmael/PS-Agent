@@ -21,6 +21,21 @@ def search_company_question(query: str, company: str, num_results: int = 3) -> l
         return _search_duckduckgo(query, label, num_results)
 
 
+def search_exa_site(query: str, domain: str, num_results: int = 15) -> list[str]:
+    """Search within a specific domain using Exa. Returns list of URLs."""
+    try:
+        from exa_py import Exa
+        from config import settings
+        if not settings.exa_api_key:
+            return []
+        exa = Exa(api_key=settings.exa_api_key)
+        result = exa.search(query, num_results=num_results, include_domains=[domain])
+        return [r.url for r in result.results if r.url]
+    except Exception as e:
+        print(f"  [exa site search] failed: {e}")
+        return []
+
+
 def search_companies(query: str, num_results: int = 8) -> list[dict]:
     """Search for companies matching a query. Returns raw result dicts."""
     try:

@@ -73,6 +73,7 @@ def generate_answer(
     company: str,
     question: Question,
     perplexity_result: dict | None = None,
+    technology_name: str = "",
 ) -> QuestionAnswer:
     fact_chunks    = retrieve_facts(company, question.prompt_text())
     extracted      = retrieve_extracted_facts(company, question.prompt_text())
@@ -90,6 +91,30 @@ def generate_answer(
     )
 
     answer_text = response.choices[0].message.content.strip()
+
+    # ── Deep-research fallback ────────────────────────────────────────────────
+    # If the initial answer has no evidence, try Perplexity deep-research once.
+    if answer_text.startswith("No evidence") and settings.perplexity_api_key:
+        print(f"    [deep-research fallback] No evidence found — retrying with Perplexity deep-research...")
+        deep_result = ask_batch(
+            [question.prompt_text()],
+            company,
+            technology_name=technology_name,
+            preset="deep-research",
+        )
+        if deep_result.get("answer"):
+            prompt2 = _build_prompt(question, fact_chunks, extracted, style_examples, deep_result)
+            response2 = _client.chat.completions.create(
+                model=settings.llm_model,
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt2},
+                ],
+                temperature=0,
+            )
+            answer_text = response2.choices[0].message.content.strip()
+            # Merge sources from deep_result into perplexity_result for attribution
+            perplexity_result = deep_result
 
     # Collect sources from all three inputs
     seen_urls: set[str] = set()
@@ -130,7 +155,7 @@ def generate_company_profile(
     for question in questions:
         print(f"  Q: {question.name}")
         pplx = perplexity_map.get(question.name)
-        qa = generate_answer(company, question, perplexity_result=pplx)
+        qa = generate_answer(company, question, perplexity_result=pplx, technology_name=technology_name)
         print(f"  A: {qa.answer[:120]}{'...' if len(qa.answer) > 120 else ''}")
         answers.append(qa)
 

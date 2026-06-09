@@ -2,22 +2,26 @@
 Agent 2 — Research
 
 Flujo:
-  1. Spider liviano  — recolecta todos los links del sitio (sin bajar contenido)
-  2. Prioriza links  — tech page primero, luego FAQ, About, Product, etc.
-  3. Pausa humana    — guarda links_<company>.txt para que el usuario edite
-  4. Crawl ordenado  — baja cada página aprobada en orden y extrae facts
-  5. Fuentes externas — búsqueda web sobre la empresa/tecnología
-  6. Extracción estructurada — un GPT call por página, todas las preguntas juntas
-  7. FAISS index     — indexa todos los docs para el writer
+  1. Recolección de links desde tres fuentes:
+       a. Exa site search  — páginas del dominio relevantes a la tecnología
+       b. Spider shallow    — homepage + 1 nivel (FAQ, About, Contact, etc.)
+       c. Perplexity search — fuentes externas (se agregan como docs, no se crawlean)
+  2. Prioriza + deduplica links internos
+  3. Pausa humana — guarda links_<company>.txt para editar
+  4. Crawl ordenado — baja cada página aprobada y extrae facts
+  5. Fuentes externas de Perplexity — se agregan directamente como docs
+  6. Extracción estructurada — un GPT call por doc, todas las preguntas juntas
+  7. FAISS index
 """
 
 import time
+from urllib.parse import urlparse
 
 from config import settings
 from models import Document
 from rag.factual_rag import build_factual_index, extract_structured_facts
 from tools.crawling import (
-    collect_links,
+    collect_links_shallow,
     fetch_page_as_doc,
     find_pdf_links,
     load_links_txt,
@@ -25,7 +29,8 @@ from tools.crawling import (
     save_links_txt,
 )
 from tools.pdf_extractor import extract_pdf_from_url
-from tools.search import search_company_info
+from tools.perplexity import search as perplexity_search
+from tools.search import search_exa_site
 
 import requests
 
@@ -49,20 +54,45 @@ def research_company(
     if technology_name:
         print(f"  Technology: {technology_name}")
 
-    # ── 1. Spider: collect all internal links ────────────────────────────────
-    print("[Research] Collecting links from site...")
-    all_links = collect_links(base_url=url, technology_url=technology_url, max_links=150)
-    print(f"  -> {len(all_links)} links found")
+    domain = urlparse(url).netloc
+    tech_query = f"{technology_name} {company}" if technology_name else company
 
-    # ── 2. Prioritize ────────────────────────────────────────────────────────
-    ordered_links = prioritize_links(all_links, technology_url=technology_url, homepage_url=url)
+    # ── 1a. Exa: find tech-relevant pages within company domain ─────────────
+    print("[Research] Exa site search...")
+    exa_links = search_exa_site(tech_query, domain, num_results=15)
+    print(f"  -> {len(exa_links)} links from Exa")
 
-    # ── 3. Save txt + human pause ────────────────────────────────────────────
-    txt_path = save_links_txt(company, technology_name, ordered_links)
-    print(f"\n[Research] Link list saved to: {txt_path}")
-    print("  Review and edit the file (reorder, delete, add URLs).")
-    print("  Press Enter when ready to start crawling...")
-    input("> ")
+    # ── 1b. Shallow spider: homepage + 1 level (FAQ, About, etc.) ───────────
+    print("[Research] Shallow spider from homepage...")
+    spider_links = collect_links_shallow(url)
+    print(f"  -> {len(spider_links)} links from spider")
+
+    # ── 1c. Perplexity: external sources (fetched as docs later) ────────────
+    external_docs: list[Document] = []
+    if settings.perplexity_api_key and technology_name:
+        print("[Research] Perplexity external search...")
+        ext_results = perplexity_search(
+            f"{company} {technology_name} specifications market", max_results=8
+        )
+        for r in ext_results:
+            if r.get("url") and r.get("content"):
+                external_docs.append(Document(
+                    text=r["content"][:6000],
+                    source=r["url"],
+                    company=company,
+                    doc_type="news",
+                ))
+        print(f"  -> {len(external_docs)} external docs from Perplexity")
+
+    # ── 2. Combine + deduplicate internal links ──────────────────────────────
+    seed = [technology_url] if technology_url else []
+    all_internal = list(dict.fromkeys(seed + exa_links + spider_links))
+
+    # ── 3. Prioritize + save txt + human pause ───────────────────────────────
+    ordered = prioritize_links(all_internal, technology_url=technology_url, homepage_url=url)
+    txt_path = save_links_txt(company, technology_name, ordered)
+
+    _pause_for_link_review(txt_path, len(ordered))
 
     approved_links = load_links_txt(txt_path)
     print(f"[Research] Crawling {len(approved_links)} approved pages...")
@@ -83,7 +113,13 @@ def research_company(
 
     print(f"  -> {len(all_docs)} pages with content")
 
-    # ── 5. PDFs ──────────────────────────────────────────────────────────────
+    # ── 5. Add external docs ─────────────────────────────────────────────────
+    for doc in external_docs:
+        if doc.source not in seen_urls:
+            seen_urls.add(doc.source)
+            all_docs.append(doc)
+
+    # ── 6. PDFs ──────────────────────────────────────────────────────────────
     print("[Research] Extracting PDFs...")
     pdf_urls = _collect_pdf_urls(technology_url or url)
     if technology_url and technology_url.rstrip("/") != url.rstrip("/"):
@@ -96,13 +132,6 @@ def research_company(
             pdf_docs.append(doc)
     print(f"  -> {len(pdf_docs)} PDFs")
     all_docs.extend(pdf_docs)
-
-    # ── 6. External search ───────────────────────────────────────────────────
-    print("[Research] Fetching external sources...")
-    search_term = f"{company} {technology_name}" if technology_name else company
-    news_docs = search_company_info(search_term, num_results=10)
-    print(f"  -> {len(news_docs)} external results")
-    all_docs.extend(news_docs)
 
     # ── 7. Structured extraction ─────────────────────────────────────────────
     if questions:
@@ -117,12 +146,70 @@ def research_company(
 
     return {
         "company": company,
-        "pages_crawled": len(all_docs) - len(pdf_docs) - len(news_docs),
+        "pages_crawled": len(all_docs) - len(external_docs) - len(pdf_docs),
+        "external_docs": len(external_docs),
         "pdfs_extracted": len(pdf_docs),
-        "news_fetched": len(news_docs),
         "chunks_indexed": store.size,
         "sources": sorted(set(d.source for d in all_docs)),
     }
+
+
+def _pause_for_link_review(txt_path, link_count: int) -> None:
+    """
+    Pausa para que el usuario revise y edite el archivo de links
+    antes de empezar el crawl.
+    """
+    import sys
+    import os
+
+    # Vaciar cualquier Enter residual en el buffer de stdin (Windows)
+    if os.name == "nt":
+        try:
+            import msvcrt
+            while msvcrt.kbhit():
+                msvcrt.getch()
+        except Exception:
+            pass
+
+    resolved = txt_path.resolve()
+
+    sys.stdout.flush()
+    print()
+    print("=" * 60)
+    print("  PAUSA — revisá los links antes de continuar")
+    print("=" * 60)
+    print(f"\n  Archivo : {resolved}")
+    print(f"  Links   : {link_count}")
+    print()
+    print("  Podés editar el archivo:")
+    print("    - Borrá líneas de páginas que no querés crawlear")
+    print("    - Cambiá el orden (de arriba = primero crawleado)")
+    print("    - Agregá URLs nuevas si querés")
+    sys.stdout.flush()
+
+    # Abre automáticamente en Notepad (Windows)
+    if os.name == "nt":
+        try:
+            os.startfile(str(resolved))
+            print("\n  [Archivo abierto en Notepad automáticamente]")
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+    print()
+    print("  Cuando terminés de editar, volvé acá y presioná ENTER.")
+    print()
+    sys.stdout.flush()
+
+    # Lectura robusta — no usa input() que puede recibir Enter residual
+    try:
+        sys.stdin.readline()
+    except (EOFError, KeyboardInterrupt):
+        print("\n[Research] stdin no interactivo — continuando con el archivo actual.")
+        sys.stdout.flush()
+
+    print("[Research] Continuando con los links aprobados...")
+    sys.stdout.flush()
 
 
 def _collect_pdf_urls(base_url: str) -> list[str]:

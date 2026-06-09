@@ -117,6 +117,18 @@ def _page_score(url: str, technology_url: str, homepage_url: str) -> int:
     return 20
 
 
+def collect_links_shallow(base_url: str) -> list[str]:
+    """
+    Fetch only the homepage and collect all links found there (1 level deep).
+    Fast and focused on general company sections: FAQ, About, Contact, etc.
+    """
+    html = _fetch_html(base_url)
+    if not html:
+        return [base_url]
+    links = _internal_links(base_url, html)
+    return list(dict.fromkeys([base_url] + links))
+
+
 def collect_links(
     base_url: str,
     technology_url: str = "",

@@ -39,6 +39,8 @@ def run_research(approved_companies: list[dict], questions: list[str] | None = N
                 technology_url=technology_url,
             )
             results[name] = result
+        except (KeyboardInterrupt, SystemExit):
+            raise  # No swallow — let the user Ctrl+C out cleanly
         except Exception as e:
             print(f"[Research] ERROR for {name}: {e}")
             results[name] = {"error": str(e)}

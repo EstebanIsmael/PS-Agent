@@ -77,6 +77,12 @@ def ask_batch(
         return {"answer": "", "sources": []}
 
 
+def search_links(query: str, num_results: int = 10) -> list[str]:
+    """Use Perplexity Search API to find URLs about a topic. Returns list of URLs."""
+    results = search(query, max_results=num_results, max_tokens_per_page=128)
+    return [r["url"] for r in results if r.get("url")]
+
+
 def search(query: str, max_results: int = 5, max_tokens_per_page: int = 512) -> list[dict]:
     """
     Search API — returns raw page results.
