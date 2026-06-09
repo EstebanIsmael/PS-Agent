@@ -1,18 +1,31 @@
 """
 Agent 2 — Research
-Para cada empresa aprobada:
-  1. Crawlea el sitio web (profundo)
-  2. Extrae PDFs encontrados en el sitio
-  3. Busca noticias / artículos externos
-  4. Construye el índice FAISS factual
+
+Flujo:
+  1. Spider liviano  — recolecta todos los links del sitio (sin bajar contenido)
+  2. Prioriza links  — tech page primero, luego FAQ, About, Product, etc.
+  3. Pausa humana    — guarda links_<company>.txt para que el usuario edite
+  4. Crawl ordenado  — baja cada página aprobada en orden y extrae facts
+  5. Fuentes externas — búsqueda web sobre la empresa/tecnología
+  6. Extracción estructurada — un GPT call por página, todas las preguntas juntas
+  7. FAISS index     — indexa todos los docs para el writer
 """
+
+import time
 
 from config import settings
 from models import Document
 from rag.factual_rag import build_factual_index, extract_structured_facts
-from tools.crawling import crawl_website, find_pdf_links
+from tools.crawling import (
+    collect_links,
+    fetch_page_as_doc,
+    find_pdf_links,
+    load_links_txt,
+    prioritize_links,
+    save_links_txt,
+)
 from tools.pdf_extractor import extract_pdf_from_url
-from tools.search import search_company_info, search_company_question
+from tools.search import search_company_info
 
 import requests
 
@@ -35,37 +48,47 @@ def research_company(
     print(f"\n[Research] === {company} ===")
     if technology_name:
         print(f"  Technology: {technology_name}")
+
+    # ── 1. Spider: collect all internal links ────────────────────────────────
+    print("[Research] Collecting links from site...")
+    all_links = collect_links(base_url=url, technology_url=technology_url, max_links=150)
+    print(f"  -> {len(all_links)} links found")
+
+    # ── 2. Prioritize ────────────────────────────────────────────────────────
+    ordered_links = prioritize_links(all_links, technology_url=technology_url, homepage_url=url)
+
+    # ── 3. Save txt + human pause ────────────────────────────────────────────
+    txt_path = save_links_txt(company, technology_name, ordered_links)
+    print(f"\n[Research] Link list saved to: {txt_path}")
+    print("  Review and edit the file (reorder, delete, add URLs).")
+    print("  Press Enter when ready to start crawling...")
+    input("> ")
+
+    approved_links = load_links_txt(txt_path)
+    print(f"[Research] Crawling {len(approved_links)} approved pages...")
+
+    # ── 4. Crawl approved pages in order ────────────────────────────────────
     all_docs: list[Document] = []
+    seen_urls: set[str] = set()
 
-    # 1a. Focused crawl on technology URL (restricted to that subtree)
-    tech_docs: list[Document] = []
-    if technology_url and technology_url != url:
-        print(f"[Research] Crawling technology page (focused)...")
-        tech_docs = crawl_website(
-            company, technology_url,
-            max_pages=settings.max_pages_per_site,
-            restrict_to_subtree=True,
-        )
-        print(f"  -> {len(tech_docs)} technology pages")
-        all_docs.extend(tech_docs)
+    for i, page_url in enumerate(approved_links, 1):
+        if page_url in seen_urls:
+            continue
+        seen_urls.add(page_url)
+        print(f"  [{i}/{len(approved_links)}] {page_url}")
+        doc = fetch_page_as_doc(page_url, company)
+        if doc:
+            all_docs.append(doc)
+        time.sleep(0.5)
 
-    # 1b. General crawl of company homepage (fewer pages, complementary info)
-    general_max = max(5, settings.max_pages_per_site - len(tech_docs))
-    print(f"[Research] Crawling company homepage (general, max {general_max} pages)...")
-    web_docs = crawl_website(
-        company, url,
-        max_pages=general_max,
-        technology_name=technology_name,
-    )
-    print(f"  -> {len(web_docs)} general pages")
-    all_docs.extend(web_docs)
+    print(f"  -> {len(all_docs)} pages with content")
 
-    # 2. PDFs — check both URLs
+    # ── 5. PDFs ──────────────────────────────────────────────────────────────
     print("[Research] Extracting PDFs...")
     pdf_urls = _collect_pdf_urls(technology_url or url)
-    if technology_url and technology_url != url:
+    if technology_url and technology_url.rstrip("/") != url.rstrip("/"):
         pdf_urls += _collect_pdf_urls(url)
-    pdf_urls = list(dict.fromkeys(pdf_urls))  # deduplicate preserving order
+    pdf_urls = list(dict.fromkeys(pdf_urls))
     pdf_docs = []
     for pdf_url in pdf_urls[: settings.max_pdfs_per_site]:
         doc = extract_pdf_from_url(pdf_url, company, settings.max_pdf_pages)
@@ -74,54 +97,29 @@ def research_company(
     print(f"  -> {len(pdf_docs)} PDFs")
     all_docs.extend(pdf_docs)
 
-    # 3. External search — use technology name if available
+    # ── 6. External search ───────────────────────────────────────────────────
     print("[Research] Fetching external sources...")
     search_term = f"{company} {technology_name}" if technology_name else company
     news_docs = search_company_info(search_term, num_results=10)
-    print(f"  -> {len(news_docs)} news / search results")
+    print(f"  -> {len(news_docs)} external results")
     all_docs.extend(news_docs)
 
-    # 4. Targeted search per question
-    question_docs: list[Document] = []
-    if questions:
-        print(f"[Research] Targeted search for {len(questions)} questions...")
-        seen_search_urls: set[str] = set(d.source for d in all_docs)
-        for q in questions:
-            term = f"{company} {technology_name} {q}" if technology_name else f"{company} {q}"
-            for doc in search_company_question(term, "", num_results=3):
-                if doc.source not in seen_search_urls:
-                    seen_search_urls.add(doc.source)
-                    question_docs.append(doc)
-        print(f"  -> {len(question_docs)} question-targeted results (deduplicated)")
-        all_docs.extend(question_docs)
-
-    # 5. Deduplicate all docs by URL before extraction
-    seen_urls: set[str] = set()
-    unique_docs: list[Document] = []
-    for doc in all_docs:
-        if doc.source not in seen_urls:
-            seen_urls.add(doc.source)
-            unique_docs.append(doc)
-    if len(unique_docs) < len(all_docs):
-        print(f"[Research] Deduplication: {len(all_docs)} → {len(unique_docs)} unique docs")
-    all_docs = unique_docs
-
-    # 6. Structured extraction: one GPT call per doc, all questions at once
+    # ── 7. Structured extraction ─────────────────────────────────────────────
     if questions:
         print("[Research] Extracting structured facts per question...")
-        extract_structured_facts(company, all_docs, questions, technology_name=technology_name)
+        extract_structured_facts(
+            company, all_docs, questions, technology_name=technology_name
+        )
 
-    # 6. Build vector index
+    # ── 8. Build FAISS index ─────────────────────────────────────────────────
     print("[Research] Building vector index...")
     store = build_factual_index(company, all_docs)
 
     return {
         "company": company,
-        "tech_pages_crawled": len(tech_docs),
-        "general_pages_crawled": len(web_docs),
+        "pages_crawled": len(all_docs) - len(pdf_docs) - len(news_docs),
         "pdfs_extracted": len(pdf_docs),
         "news_fetched": len(news_docs),
-        "question_targeted": len(question_docs),
         "chunks_indexed": store.size,
         "sources": sorted(set(d.source for d in all_docs)),
     }

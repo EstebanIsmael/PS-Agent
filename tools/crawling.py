@@ -1,5 +1,6 @@
 import re
 import time
+from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -38,13 +39,43 @@ def _extract_text(html: str) -> str:
     return _clean_text(soup.get_text(separator=" "))
 
 
-# Matches language prefixes like /fr/, /zh-cn/, /pt-br/, etc.
+# Language detection — 2-letter codes AND full language names
 _LANG_PREFIX = re.compile(r"^/[a-z]{2}(/|$)|^/[a-z]{2}-[a-z]{2}(/|$)", re.IGNORECASE)
+_LANG_NAMES = {
+    "chinese", "japanese", "korean", "french", "german", "spanish",
+    "portuguese", "italian", "russian", "arabic", "thai", "vietnamese",
+    "dutch", "polish", "swedish", "norwegian", "danish", "finnish",
+    "turkish", "hungarian", "romanian", "czech", "slovak", "bulgarian",
+}
+
+# Paths to always skip — not useful for research
+_SKIP_SEGMENTS = {
+    "cart", "login", "logout", "account", "register", "checkout",
+    "privacy", "terms", "cookie", "sitemap", "search", "404",
+    "wp-admin", "wp-login", "feed", "rss", "cdn-cgi",
+}
+
+# Priority scoring for page ordering (higher = crawl first)
+_PAGE_SCORES = [
+    (90, {"faq", "faqs", "support", "qa", "question", "help", "knowledge"}),
+    (80, {"about", "company", "overview", "profile", "corporate", "who-we-are"}),
+    (70, {"product", "technology", "solution", "material", "specification", "spec", "datasheet"}),
+    (50, {"news", "blog", "press", "media", "article", "case-study", "case", "application"}),
+    (30, {"contact", "team", "career", "job", "distributor", "partner"}),
+]
 
 
 def _is_lang_variant(url: str) -> bool:
     path = urlparse(url).path
-    return bool(_LANG_PREFIX.match(path))
+    if _LANG_PREFIX.match(path):
+        return True
+    first_segment = path.strip("/").split("/")[0].lower() if path.strip("/") else ""
+    return first_segment in _LANG_NAMES
+
+
+def _should_skip(url: str) -> bool:
+    segments = {p.lower() for p in urlparse(url).path.split("/") if p}
+    return bool(segments & _SKIP_SEGMENTS)
 
 
 def _internal_links(base_url: str, html: str) -> list[str]:
@@ -56,7 +87,7 @@ def _internal_links(base_url: str, html: str) -> list[str]:
         href = urljoin(base_url, a["href"]).split("#")[0].split("?")[0]
         parsed = urlparse(href)
         if parsed.netloc == base_domain and parsed.scheme in ("http", "https"):
-            if not _is_lang_variant(href):
+            if not _is_lang_variant(href) and not _should_skip(href):
                 links.add(href)
 
     return list(links)
@@ -72,92 +103,111 @@ def find_pdf_links(base_url: str, html: str) -> list[str]:
     return pdfs
 
 
-def _tech_keywords(technology_name: str) -> set[str]:
-    """Extract meaningful lowercase keywords from a technology name for URL matching."""
-    stopwords = {"the", "a", "an", "of", "for", "and", "or", "by", "in", "with"}
-    words = re.sub(r"[^a-z0-9 ]", " ", technology_name.lower()).split()
-    return {w for w in words if len(w) > 2 and w not in stopwords}
+def _page_score(url: str, technology_url: str, homepage_url: str) -> int:
+    """Higher score = crawl first."""
+    clean = url.rstrip("/")
+    if clean == technology_url.rstrip("/"):
+        return 200
+    if clean == homepage_url.rstrip("/"):
+        return 60
+    parts = set(re.sub(r"[-_]", "/", urlparse(url).path.lower()).split("/"))
+    for score, keywords in _PAGE_SCORES:
+        if parts & keywords:
+            return score
+    return 20
 
 
-def _url_matches_other_product(url: str, tech_keywords: set[str]) -> bool:
-    """
-    Returns True if the URL path contains a product-like segment that shares
-    NO keywords with the target technology — likely a different product page.
-    Only filters paths with clear product segments (e.g. /product/, /solution/, /material/).
-    """
-    if not tech_keywords:
-        return False
-    path = urlparse(url).path.lower()
-    product_sections = re.findall(
-        r"(?:product|solution|material|technology|service)s?/([^/]+)", path
-    )
-    if not product_sections:
-        return False
-    for segment in product_sections:
-        segment_words = set(re.sub(r"[^a-z0-9 ]", " ", segment).split())
-        if segment_words and segment_words.isdisjoint(tech_keywords):
-            return True
-    return False
-
-
-def crawl_website(
-    company: str,
+def collect_links(
     base_url: str,
-    max_pages: int = 30,
-    restrict_to_subtree: bool = False,
-    technology_name: str = "",
-) -> list[Document]:
+    technology_url: str = "",
+    max_links: int = 150,
+) -> list[str]:
     """
-    Crawl a website starting from base_url.
-    If restrict_to_subtree=True, only follow links that start with base_url's path
-    (useful for crawling a specific product/technology section).
+    Spider the site to collect internal URLs without storing page content.
+    Returns deduplicated list (no language variants, no skip-paths).
     """
+    seed_urls = [base_url]
+    if technology_url and technology_url.rstrip("/") != base_url.rstrip("/"):
+        seed_urls.insert(0, technology_url)
+
     visited: set[str] = set()
-    queue: list[str] = [base_url]
-    documents: list[Document] = []
-    skipped_product = 0
+    queue: list[str] = list(seed_urls)
+    found: set[str] = set(seed_urls)
 
-    base_path = urlparse(base_url).path.rstrip("/")
-    tech_kw = _tech_keywords(technology_name)
-
-    while queue and len(visited) < max_pages:
+    while queue and len(found) < max_links:
         url = queue.pop(0)
         if url in visited:
             continue
-
-        # Filter out pages that clearly belong to a different product
-        if not restrict_to_subtree and _url_matches_other_product(url, tech_kw):
-            skipped_product += 1
-            visited.add(url)
-            continue
-
         visited.add(url)
 
         html = _fetch_html(url)
         if not html:
             continue
 
-        text = _extract_text(html)
-        if len(text) > 200:
-            documents.append(Document(
-                text=text,
-                source=url,
-                company=company,
-                doc_type="website",
-            ))
-
         for link in _internal_links(base_url, html):
-            if link in visited or link in queue:
-                continue
-            if restrict_to_subtree:
-                link_path = urlparse(link).path.rstrip("/")
-                if not link_path.startswith(base_path):
-                    continue
-            queue.append(link)
+            if link not in found:
+                found.add(link)
+                queue.append(link)
 
         time.sleep(CRAWL_DELAY)
 
-    if skipped_product:
-        print(f"    [crawl] skipped {skipped_product} pages from other products")
+    return list(found)
 
-    return documents
+
+def prioritize_links(
+    urls: list[str],
+    technology_url: str = "",
+    homepage_url: str = "",
+) -> list[str]:
+    """Sort URLs by research relevance: technology page first, then FAQs, about, etc."""
+    return sorted(urls, key=lambda u: _page_score(u, technology_url, homepage_url), reverse=True)
+
+
+def save_links_txt(
+    company: str,
+    technology_name: str,
+    urls: list[str],
+    output_dir: str = "output",
+) -> Path:
+    """Save ordered link list to a txt file for human review."""
+    Path(output_dir).mkdir(exist_ok=True)
+    safe = company.lower().replace(" ", "_").replace("/", "_")
+    path = Path(output_dir) / f"links_{safe}.txt"
+
+    lines = [
+        f"# Research pages for: {company}" + (f" — {technology_name}" if technology_name else ""),
+        "# ─────────────────────────────────────────────────────",
+        "# Instructions:",
+        "#   - Lines starting with # are comments (ignored)",
+        "#   - Delete lines for pages you don't want to crawl",
+        "#   - Add new URLs at any position",
+        "#   - Order matters: pages are crawled top to bottom",
+        "# ─────────────────────────────────────────────────────",
+        "",
+    ]
+    for url in urls:
+        lines.append(url)
+
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
+def load_links_txt(path: Path) -> list[str]:
+    """Read back approved URLs from the txt file (skip comments and blanks)."""
+    urls = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            urls.append(line)
+    return urls
+
+
+def fetch_page_as_doc(url: str, company: str) -> Document | None:
+    """Fetch a single page and return it as a Document."""
+    html = _fetch_html(url)
+    if not html:
+        return None
+    text = _extract_text(html)
+    if len(text) < 200:
+        return None
+    return Document(text=text, source=url, company=company, doc_type="website")
