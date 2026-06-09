@@ -2,9 +2,11 @@
 Agent 3 — Writer
 Para cada pregunta:
   1. Recupera chunks factuales (Factual RAG)
-  2. Recupera ejemplos de estilo (Style RAG)
-  3. Genera la respuesta con GPT-4o-mini
-  4. Devuelve respuesta + referencias
+  2. Recupera direct quotes extraídas durante el research
+  3. Usa respuesta de Perplexity (generada en batch antes de escribir)
+  4. Recupera ejemplos de estilo (Style RAG)
+  5. Genera la respuesta con GPT
+  6. Devuelve respuesta + referencias
 """
 
 from datetime import datetime
@@ -15,6 +17,7 @@ from config import settings
 from models import CompanyProfile, QuestionAnswer, SourceRef
 from rag.factual_rag import retrieve_extracted_facts, retrieve_facts
 from rag.style_rag import retrieve_style_examples
+from tools.perplexity import ask_batch
 from tools.questions_loader import Question
 
 _client = OpenAI(api_key=settings.openai_api_key)
@@ -29,13 +32,53 @@ Rules:
 5. Do not mention sources or URLs inside the answer text.
 6. Start your answer DIRECTLY with the content. Do NOT repeat or echo the question. Do NOT add headings or labels."""
 
+_BATCH_SIZE = 5  # questions per Perplexity call
 
-def generate_answer(company: str, question: Question) -> QuestionAnswer:
-    fact_chunks   = retrieve_facts(company, question.prompt_text())
-    extracted     = retrieve_extracted_facts(company, question.prompt_text())
+
+def _run_perplexity_batches(
+    questions: list[Question],
+    company: str,
+    technology_name: str,
+) -> dict[str, dict]:
+    """
+    Run Perplexity for all questions in batches of _BATCH_SIZE.
+    Returns {question_name: {"answer": str, "sources": [str]}}
+    """
+    if not settings.perplexity_api_key:
+        return {}
+
+    print(f"  [Perplexity] Running {len(questions)} questions in batches of {_BATCH_SIZE}...")
+    results: dict[str, dict] = {}
+
+    for i in range(0, len(questions), _BATCH_SIZE):
+        batch = questions[i : i + _BATCH_SIZE]
+        q_names  = [q.name for q in batch]
+        q_prompts = [q.prompt_text() for q in batch]
+
+        batch_num = i // _BATCH_SIZE + 1
+        total_batches = (len(questions) + _BATCH_SIZE - 1) // _BATCH_SIZE
+        print(f"    batch {batch_num}/{total_batches}: {q_names}")
+
+        response = ask_batch(q_prompts, company, technology_name)
+
+        # Map each question in the batch to the same full response —
+        # the writer will extract the relevant part per question
+        for q in batch:
+            results[q.name] = response
+
+    return results
+
+
+def generate_answer(
+    company: str,
+    question: Question,
+    perplexity_result: dict | None = None,
+) -> QuestionAnswer:
+    fact_chunks    = retrieve_facts(company, question.prompt_text())
+    extracted      = retrieve_extracted_facts(company, question.prompt_text())
     style_examples = retrieve_style_examples(question.name)
 
-    prompt = _build_prompt(question, fact_chunks, extracted, style_examples)
+    prompt = _build_prompt(question, fact_chunks, extracted, style_examples, perplexity_result)
 
     response = _client.chat.completions.create(
         model=settings.llm_model,
@@ -48,7 +91,7 @@ def generate_answer(company: str, question: Question) -> QuestionAnswer:
 
     answer_text = response.choices[0].message.content.strip()
 
-    # Deduplicated source references — combine both sources
+    # Collect sources from all three inputs
     seen_urls: set[str] = set()
     sources: list[SourceRef] = []
 
@@ -64,18 +107,30 @@ def generate_answer(company: str, question: Question) -> QuestionAnswer:
             seen_urls.add(url)
             sources.append(SourceRef(url=url, excerpt=chunk["chunk_text"][:300] + "..."))
 
+    if perplexity_result:
+        for url in perplexity_result.get("sources", []):
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                sources.append(SourceRef(url=url, excerpt="(Perplexity web search)"))
+
     return QuestionAnswer(question=question.name, answer=answer_text, sources=sources)
 
 
 def generate_company_profile(
-    company: str, questions: list[Question]
+    company: str,
+    questions: list[Question],
+    technology_name: str = "",
 ) -> CompanyProfile:
     print(f"\n[Writer] === {company} ===")
-    answers: list[QuestionAnswer] = []
 
+    # Run all Perplexity batches upfront
+    perplexity_map = _run_perplexity_batches(questions, company, technology_name)
+
+    answers: list[QuestionAnswer] = []
     for question in questions:
         print(f"  Q: {question.name}")
-        qa = generate_answer(company, question)
+        pplx = perplexity_map.get(question.name)
+        qa = generate_answer(company, question, perplexity_result=pplx)
         print(f"  A: {qa.answer[:120]}{'...' if len(qa.answer) > 120 else ''}")
         answers.append(qa)
 
@@ -91,39 +146,51 @@ def _build_prompt(
     fact_chunks: list[dict],
     extracted: list[dict],
     style_examples: list[dict],
+    perplexity_result: dict | None,
 ) -> str:
     style_section = "\n\n".join(
         f"Q: {ex['question']}\nA: {ex['answer']}" for ex in style_examples
     ) or "(no style examples available — write a concise factual sentence)"
 
-    # Pre-extracted direct quotes (high precision)
-    if extracted:
-        extracted_section = "\n\n".join(
-            f"[Source: {e['source']}]\n\"{e['quote']}\"" for e in extracted
-        )
-    else:
-        extracted_section = "(none)"
+    # Direct quotes from crawl (high precision)
+    extracted_section = "\n\n".join(
+        f"[Source: {e['source']}]\n\"{e['quote']}\"" for e in extracted
+    ) or "(none)"
 
-    # FAISS chunks (broader context)
+    # FAISS chunks
     chunks_section = "\n\n---\n\n".join(
         f"[Source: {c['source']}]\n{c['chunk_text']}" for c in fact_chunks
     ) or "(none)"
 
-    question_line = question.prompt_text()
+    # Perplexity synthesized answer
+    if perplexity_result and perplexity_result.get("answer"):
+        pplx_sources = "\n".join(
+            f"  - {u}" for u in perplexity_result.get("sources", [])[:5]
+        )
+        pplx_section = perplexity_result["answer"]
+        if pplx_sources:
+            pplx_section += f"\n\nSources:\n{pplx_sources}"
+    else:
+        pplx_section = "(none)"
 
     return f"""STYLE EXAMPLES (use for format and tone only — do not use as facts):
 {style_section}
 
 ================
 
-DIRECT QUOTES extracted from company sources (high confidence — prefer these):
+DIRECT QUOTES extracted from company sources (highest confidence):
 {extracted_section}
 
 ================
 
-ADDITIONAL CONTEXT from indexed documents (use to complement the quotes above):
+ADDITIONAL CONTEXT from indexed documents:
 {chunks_section}
 
 ================
 
-QUESTION: {question_line}"""
+PERPLEXITY WEB RESEARCH (synthesized from multiple web sources — use to complement above):
+{pplx_section}
+
+================
+
+QUESTION: {question.prompt_text()}"""

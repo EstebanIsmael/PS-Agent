@@ -5,6 +5,7 @@ from pathlib import Path
 class Settings(BaseSettings):
     openai_api_key: str
     exa_api_key: str = ""
+    perplexity_api_key: str = ""
 
     data_dir: Path = Path("data")
     style_examples_dir: Path = Path("data/style_examples")

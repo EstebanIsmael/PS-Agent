@@ -62,7 +62,9 @@ def run_writer(
         if "error" in research_results[name]:
             print(f"[Writer] Skipping {name} — research failed")
             continue
-        profile = generate_company_profile(name, q_objects)
+        tech = company_info.get("evidence", {}).get("technology", {})
+        technology_name = tech.get("quote", "")
+        profile = generate_company_profile(name, q_objects, technology_name=technology_name)
         profiles.append(profile.model_dump(mode="json"))
     return profiles
 
