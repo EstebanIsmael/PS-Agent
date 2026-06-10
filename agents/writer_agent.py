@@ -95,7 +95,7 @@ def generate_answer(
     # ── Deep-research fallback ────────────────────────────────────────────────
     # If the initial answer has no evidence, try Perplexity deep-research once.
     if answer_text.startswith("No evidence") and settings.perplexity_api_key:
-        print(f"    [deep-research fallback] No evidence found — retrying with Perplexity deep-research...")
+        print(f"    [deep-research] no evidence on first pass — retrying '{question.name}' (can take up to 4 min)...")
         deep_result = ask_batch(
             [question.prompt_text()],
             company,
@@ -112,9 +112,16 @@ def generate_answer(
                 ],
                 temperature=0,
             )
-            answer_text = response2.choices[0].message.content.strip()
-            # Merge sources from deep_result into perplexity_result for attribution
-            perplexity_result = deep_result
+            new_answer = response2.choices[0].message.content.strip()
+            if new_answer.startswith("No evidence"):
+                print(f"    [deep-research] still no evidence for '{question.name}'")
+            else:
+                print(f"    [deep-research] found new evidence for '{question.name}'")
+                answer_text = new_answer
+                # Merge sources from deep_result into perplexity_result for attribution
+                perplexity_result = deep_result
+        else:
+            print(f"    [deep-research] no result for '{question.name}' — keeping original answer")
 
     # Collect sources from all three inputs
     seen_urls: set[str] = set()

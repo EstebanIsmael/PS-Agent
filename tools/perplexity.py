@@ -13,6 +13,13 @@ from config import settings
 _AGENT_URL  = "https://api.perplexity.ai/v1/responses"
 _SEARCH_URL = "https://api.perplexity.ai/search"
 
+# deep-research does multiple search iterations and can take 1-3+ minutes;
+# fast-search is usually done in well under a minute.
+_TIMEOUTS = {
+    "fast-search": 60,
+    "deep-research": 240,
+}
+
 
 def _headers() -> dict:
     return {
@@ -46,12 +53,14 @@ def ask_batch(
         f"{q_lines}"
     )
 
+    timeout = _TIMEOUTS.get(preset, 60)
+
     try:
         r = requests.post(
             _AGENT_URL,
             headers=_headers(),
             json={"preset": preset, "input": prompt},
-            timeout=60,
+            timeout=timeout,
         )
         r.raise_for_status()
         data = r.json()
@@ -72,8 +81,11 @@ def ask_batch(
 
         return {"answer": answer, "sources": sources}
 
+    except requests.exceptions.Timeout:
+        print(f"  [perplexity] ask_batch ({preset}) timed out after {timeout}s")
+        return {"answer": "", "sources": []}
     except Exception as e:
-        print(f"  [perplexity] ask_batch failed: {e}")
+        print(f"  [perplexity] ask_batch ({preset}) failed: {e}")
         return {"answer": "", "sources": []}
 
 
