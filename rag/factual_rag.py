@@ -16,11 +16,11 @@ _client = OpenAI(api_key=settings.openai_api_key)
 # ── Text sanitization ─────────────────────────────────────────────────────────
 
 def _sanitize(text: str) -> str:
-    """
+    r"""
     Remove characters that cause JSON parsing failures when GPT copies them
     verbatim into a JSON string:
       - ASCII control characters (null bytes, form feeds, etc.)
-      - Lone backslashes not part of a valid JSON escape (\", \\, \/, \b, \f, \n, \r, \t)
+      - Lone backslashes not part of a valid JSON escape (", \, /, b, f, n, r, t)
         These turn into invalid \uXXXX sequences in the GPT response.
     """
     # Strip control characters except tab, newline, carriage return
