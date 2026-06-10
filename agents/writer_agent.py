@@ -131,13 +131,13 @@ def generate_answer(
         url = item.get("source", "")
         if url and url not in seen_urls:
             seen_urls.add(url)
-            sources.append(SourceRef(url=url, excerpt=item["quote"][:300]))
+            sources.append(SourceRef(url=url, excerpt=item["quote"]))
 
     for chunk in fact_chunks:
         url = chunk.get("source", "")
         if url and url not in seen_urls:
             seen_urls.add(url)
-            sources.append(SourceRef(url=url, excerpt=chunk["chunk_text"][:300] + "..."))
+            sources.append(SourceRef(url=url, excerpt=chunk["chunk_text"]))
 
     if perplexity_result:
         for url in perplexity_result.get("sources", []):

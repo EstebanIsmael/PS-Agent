@@ -14,6 +14,7 @@ from agents.discovery_agent import discover_companies
 from agents.research_agent import research_company
 from agents.writer_agent import generate_company_profile
 from models import Requirement
+from tools.excel_export import export_profiles_to_excel
 from tools.questions_loader import Question
 
 
@@ -73,14 +74,20 @@ def run_writer(
 
 def save_profiles(profiles: list[dict], output_dir: str = "output", ts: str = "") -> None:
     Path(output_dir).mkdir(exist_ok=True)
+    suffix = f"_{ts}" if ts else ""
+
     for profile in profiles:
         company = profile["company"]
-        suffix = f"_{ts}" if ts else ""
         filename = company.lower().replace(" ", "_") + f"_profile{suffix}.json"
         filepath = Path(output_dir) / filename
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(profile, f, indent=2, ensure_ascii=False, default=str)
         print(f"  Saved: {filepath}")
+
+    if profiles:
+        excel_path = Path(output_dir) / f"profiles{suffix}.xlsx"
+        export_profiles_to_excel(profiles, excel_path)
+        print(f"  Saved: {excel_path}")
 
 
 def save_discovery_txt(candidates: list[dict], output_dir: str = "output", txt_suffix: str = "") -> Path:
